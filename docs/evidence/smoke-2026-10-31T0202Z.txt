@@ -1,0 +1,34 @@
+$ python3 scripts/smoke_test.py --stack campus-cafe
+API: https://lbw14ufund.execute-api.us-east-1.amazonaws.com
+ok    GET /products -> 200 {items}
+ok    >= 5 products, one unavailable, one currency
+ok    GET /products/{id} -> 200 product
+ok    GET unknown product -> 404
+ok    POST /orders -> 201 CREATED with Location
+ok    server-side total
+ok    replay same key -> 200 original result
+ok    same key, different request -> 409
+ok    missing Idempotency-Key -> 400
+ok    unknown product -> 400
+ok    unavailable product -> 409 PRODUCT_UNAVAILABLE
+ok    rejects price override in line -> 400
+ok    rejects total override -> 400
+ok    rejects quantity 0 -> 400
+ok    rejects quantity 11 -> 400
+ok    rejects fractional quantity -> 400
+ok    rejects duplicate productId -> 400
+ok    rejects 11 distinct lines -> 400
+ok    rejects empty items -> 400
+ok    rejects malformed productId -> 400
+ok    5 concurrent identical submissions -> one 201, four 200, one orderId
+ok    GET /orders/{id} -> 200
+ok    cancel -> 200 CANCELLED, repeat identical
+ok    cancellation persisted
+ok    replay still returns stored creation result
+ok    GET missing order -> 404
+ok    cancel missing order -> 404
+ok    cancel did not create it
+ok    CORS preflight allows the frontend origin
+ok    CORS preflight does not allow other origins
+
+30 checks passed against https://lbw14ufund.execute-api.us-east-1.amazonaws.com
