@@ -7,6 +7,8 @@ Actual output of the checks run against the deployed stack (us-east-1, AWS Acade
 | [smoke-2026-10-31T0202Z.txt](smoke-2026-10-31T0202Z.txt) | `python3 scripts/smoke_test.py --stack campus-cafe` | 30/30 checks passed |
 | [evidence-2026-10-31T031854Z.md](evidence-2026-10-31T031854Z.md) | `python3 scripts/collect_evidence.py --stack campus-cafe` | 18 PASS, 0 FAIL |
 
+**Demo video:** [demo-ui.webm](demo-ui.webm) shows the application working: the local browser UI calling the deployed API.
+
 The smoke run is the console output copied from CloudShell. It ran against the first deployment, before AWS client creation moved to the Lambda init phase; that change does not alter request handling, and the later evidence run repeats the concurrency, replay and fault checks on the current code.
 
 Notes:

@@ -7,6 +7,7 @@ Ordering application for a campus café: a locally served web interface, **API G
 * API contract: [docs/openapi.yaml](docs/openapi.yaml) (OpenAPI 3.0).
 * Design decisions (service and data boundaries, atomic idempotency, durable state, bounded Catalog call): [docs/DESIGN.md](docs/DESIGN.md).
 * Actual check output and measurements against AWS: [docs/evidence/](docs/evidence/README.md).
+* Demo video of the application working: [docs/evidence/demo-ui.webm](docs/evidence/demo-ui.webm).
 
 ## Structure
 
