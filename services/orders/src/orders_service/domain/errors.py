@@ -18,6 +18,11 @@ class Unauthenticated(OrderError):
     message = "Sign in to use orders."
 
 
+class InsufficientScope(OrderError):
+    code = "INSUFFICIENT_SCOPE"
+    message = "Your sign-in does not allow this action."
+
+
 class InvalidRequest(OrderError):
     code = "INVALID_REQUEST"
 

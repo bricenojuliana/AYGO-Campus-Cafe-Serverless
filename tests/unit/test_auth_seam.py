@@ -81,7 +81,8 @@ def test_ownership_fields_in_create_input_are_rejected(service):
 
 def test_verified_claims_become_the_principal():
     event = http_api_event("GET /orders/{orderId}", "/orders/x", claims=TEST_CLAIMS)
-    assert principal_from_event(event) == Principal(issuer=ISSUER, subject="auth0|student-1")
+    assert principal_from_event(event) == Principal(issuer=ISSUER, subject="auth0|student-1",
+                                                    scopes=frozenset({"orders:create", "orders:read", "orders:cancel"}))
 
 
 def test_missing_context_raises_instead_of_defaulting_to_anonymous():

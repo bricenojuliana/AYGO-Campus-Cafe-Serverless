@@ -7,7 +7,7 @@ import time
 from http import HTTPStatus
 
 from .adapters.catalog_http_client import correlation_id
-from .api.auth import principal_from_event
+from .api.auth import principal_from_event, require_scope
 from .api.observability import emit_metric, request_log
 from .api.responses import error_response, error_status_of, json_response, request_id_of
 from .domain.errors import InvalidRequest, OrderError
@@ -84,6 +84,7 @@ def handle(event: dict, service, deadline: float) -> dict:
 
     try:
         caller = principal_from_event(event)  # before any route work: no verified identity, no access
+        require_scope(caller, route_key)  # and no permission for this route, no access
         if route_key == "POST /orders":
             result = service.create_order(headers.get("idempotency-key"), _json_body(event), deadline, caller)
             if result.replayed:

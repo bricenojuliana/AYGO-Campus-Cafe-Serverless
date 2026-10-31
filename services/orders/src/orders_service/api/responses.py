@@ -8,9 +8,9 @@ from dataclasses import dataclass, field
 from http import HTTPStatus
 from typing import Any, Mapping, Optional
 
-from ..domain.errors import (CatalogUnavailable, IdempotencyConflict, InvalidRequest, MissingIdempotencyKey,
-                             OrderError, OrderNotFound, ProductUnavailable, StoreUnavailable, Unauthenticated,
-                             UnknownProduct)
+from ..domain.errors import (CatalogUnavailable, IdempotencyConflict, InsufficientScope, InvalidRequest,
+                             MissingIdempotencyKey, OrderError, OrderNotFound, ProductUnavailable, StoreUnavailable,
+                             Unauthenticated, UnknownProduct)
 
 JSON_HEADERS = {"content-type": "application/json"}
 
@@ -24,6 +24,8 @@ class ErrorStatus:
 
 ERROR_STATUS: Mapping[type, ErrorStatus] = {
     Unauthenticated: ErrorStatus(HTTPStatus.UNAUTHORIZED, {"www-authenticate": "Bearer"}),
+    # RFC 6750: a valid token that lacks the scope the operation needs.
+    InsufficientScope: ErrorStatus(HTTPStatus.FORBIDDEN, {"www-authenticate": 'Bearer error="insufficient_scope"'}),
     InvalidRequest: ErrorStatus(HTTPStatus.BAD_REQUEST),
     MissingIdempotencyKey: ErrorStatus(HTTPStatus.BAD_REQUEST),
     UnknownProduct: ErrorStatus(HTTPStatus.BAD_REQUEST),

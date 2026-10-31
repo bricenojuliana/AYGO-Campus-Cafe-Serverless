@@ -141,6 +141,7 @@ Orders needs the API's URL in its environment. With SAM `HttpApi` events, the ge
 * All inputs are validated in the domain layer: UUID product IDs, quantity bounds, line limits, duplicates and unknown fields such as client prices or totals.
 * Authentication is outside the baseline. Every route declares `AuthorizationType: NONE`, and `template.yaml` contains the commented JWT authorizer to attach to `/orders`.
   * `orders_service/api/auth.py` reads `iss` and `sub` from `requestContext.authorizer.jwt.claims` into a `Principal`. Without them Orders answers 401 (fail closed).
+  * Each Orders route needs exactly one scope from the token's `scope` claim (`orders:create`, `orders:read`, `orders:cancel`; `api/auth.py` `ROUTE_SCOPES`). Without it Orders answers 403 `INSUFFICIENT_SCOPE` before doing any work. The gateway authorizer checks the same scopes; this second check keeps a misconfigured route from granting more.
   * Orders stores an optional `ownerId`, and the service hides orders owned by someone else (reported as 404).
   * With authentication, idempotency keys are scoped per caller.
   * CORS is not used as access control.

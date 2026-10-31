@@ -357,6 +357,7 @@ components:
           type: string
           enum:
             - UNAUTHENTICATED
+            - INSUFFICIENT_SCOPE
             - INVALID_REQUEST
             - MISSING_IDEMPOTENCY_KEY
             - UNKNOWN_PRODUCT
