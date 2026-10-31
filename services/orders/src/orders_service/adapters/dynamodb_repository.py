@@ -78,7 +78,8 @@ class DynamoOrderRepository:
         if item is None or int(item["expiresAt"]) <= now_epoch:
             return None
         return IdempotencyRecord(key, item["fingerprint"], item["orderId"],
-                                 json.loads(item["responseBody"]), int(item["expiresAt"]))
+                                 json.loads(item["responseBody"]), int(item["expiresAt"]),
+                                 owner_issuer=item.get("ownerIss", ""), owner_subject=item.get("ownerSub", ""))
 
     def create_order(self, order: Order, record: IdempotencyRecord, now_epoch: int) -> None:
         idempotency_item = {
@@ -89,6 +90,8 @@ class DynamoOrderRepository:
             # Stored as the exact JSON text so a replay returns the original creation result.
             "responseBody": json.dumps(record.response_body, separators=(",", ":")),
             "expiresAt": record.expires_at,
+            "ownerIss": record.owner_issuer,
+            "ownerSub": record.owner_subject,
         }
         # Same token on SDK-level retries of this one attempt makes them idempotent for 10 minutes.
         token = hashlib.sha256(f"{record.key}|{order.order_id}".encode()).hexdigest()[:36]

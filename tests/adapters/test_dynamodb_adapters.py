@@ -44,7 +44,8 @@ def sample_order(order_id="CC-0000-0001"):
 
 
 def record_for(order, key="demo-order-001", fingerprint="fp", expires_at=NOW + 100):
-    return IdempotencyRecord(key, fingerprint, order.order_id, order.to_api(), expires_at)
+    return IdempotencyRecord(key, fingerprint, order.order_id, order.to_api(), expires_at,
+                             owner_issuer=OWNER.issuer, owner_subject=OWNER.subject)
 
 
 def test_catalog_repository_reads_seeded_products(aws):
@@ -103,6 +104,14 @@ def test_conditional_replace_never_creates_and_detects_conflicts(orders_repo):
     orders_repo.create_order(order, record_for(order), NOW)
     with pytest.raises(VersionConflict):
         orders_repo.replace_order(order, expected_version=7, owner=OWNER)
+
+
+def test_idempotency_record_keeps_its_owner(orders_repo):
+    order = sample_order()
+    orders_repo.create_order(order, record_for(order), NOW)
+    stored = orders_repo.get_idempotency_record("demo-order-001", NOW)
+    assert (stored.owner_issuer, stored.owner_subject) == (OWNER.issuer, OWNER.subject)
+    assert stored.belongs_to(OWNER) and not stored.belongs_to(Principal(OWNER.issuer, "auth0|someone-else"))
 
 
 def test_owner_is_stored_and_dynamodb_refuses_a_cancel_by_anyone_else(orders_repo, aws):

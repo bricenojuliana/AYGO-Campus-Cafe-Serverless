@@ -7,7 +7,8 @@ from ..domain.errors import IdempotencyConflict, OrderNotFound, StoreUnavailable
 from ..domain.ids import normalize_order_id
 from ..domain.order import IdempotencyRecord, Order, build_order, can_access, cancelled
 from ..domain.principal import Principal
-from ..domain.requests import parse_create_request, request_fingerprint, validate_idempotency_key
+from ..domain.requests import (idempotency_scope_key, parse_create_request, request_fingerprint,
+                               validate_idempotency_key)
 from .ports import CatalogClient, IdempotencyKeyTaken, OrderIdTaken, OrderRepository, VersionConflict
 
 CANCEL_ATTEMPTS = 3
@@ -38,15 +39,15 @@ class OrderService:
 
     def create_order(self, idempotency_key: Optional[str], body: Any, deadline: float,
                      caller: Principal) -> CreateOrderResult:
-        key = validate_idempotency_key(idempotency_key)
-        key = f"{caller.subject}|{key}"  # keys are scoped per caller (made collision-proof in the next step)
+        # The stored key is scoped to the caller: the same header value from two users never collides.
+        key = idempotency_scope_key(caller.issuer, caller.subject, validate_idempotency_key(idempotency_key))
         lines = parse_create_request(body)
         fingerprint = request_fingerprint(lines)
         now = self._clock()
 
         existing = self._repository.get_idempotency_record(key, int(now.timestamp()))
         if existing is not None:
-            return self._replay(existing, fingerprint)
+            return self._replay(existing, fingerprint, caller)
 
         products = self._catalog.get_products([line.product_id for line in lines], deadline)
         for _ in range(ORDER_ID_ATTEMPTS):
@@ -54,7 +55,8 @@ class OrderService:
                                 owner=caller)
             body_to_store = order.to_api()
             record = IdempotencyRecord(key, fingerprint, order.order_id, body_to_store,
-                                       int(now.timestamp()) + self._idempotency_ttl)
+                                       int(now.timestamp()) + self._idempotency_ttl,
+                                       owner_issuer=caller.issuer, owner_subject=caller.subject)
             try:
                 self._repository.create_order(order, record, int(now.timestamp()))
             except OrderIdTaken:
@@ -64,7 +66,7 @@ class OrderService:
                 winner = self._repository.get_idempotency_record(key, int(now.timestamp()))
                 if winner is None:
                     raise StoreUnavailable()
-                return self._replay(winner, fingerprint)
+                return self._replay(winner, fingerprint, caller)
             return CreateOrderResult(order.order_id, body_to_store, replayed=False)
         raise StoreUnavailable()
 
@@ -92,8 +94,9 @@ class OrderService:
         raise StoreUnavailable()
 
     @staticmethod
-    def _replay(record: IdempotencyRecord, fingerprint: str) -> CreateOrderResult:
-        if record.fingerprint != fingerprint:
+    def _replay(record: IdempotencyRecord, fingerprint: str, caller: Principal) -> CreateOrderResult:
+        # Never hand one user's stored response to another, and never reuse a key for a different request.
+        if not record.belongs_to(caller) or record.fingerprint != fingerprint:
             raise IdempotencyConflict()
         return CreateOrderResult(record.order_id, record.response_body, replayed=True)
 

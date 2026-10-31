@@ -48,6 +48,23 @@ def parse_create_request(body: Any) -> tuple[OrderLine, ...]:
     return tuple(sorted(lines.values(), key=lambda line: line.product_id))
 
 
+def idempotency_scope_key(issuer: str, subject: str, key: str) -> str:
+    """Storage key for an Idempotency-Key, scoped to the caller (issuer + subject) that sent it.
+
+    Requirements:
+    * Deterministic: the same (issuer, subject, key) always gives the same result, so a retry finds
+      the original record.
+    * Collision-free: two different triples must never give the same result, even though the values
+      can contain separators. Auth0 subjects look like "auth0|abc" and keys may contain "." ":" "-" "_".
+    * Used inside the DynamoDB partition key (max 2048 bytes), so keep it a short string.
+    """
+    # A JSON list quotes and escapes each value, so separators inside a value cannot shift the boundary
+    # between parts ("auth0|a" + "b|k" and "auth0|a|b" + "k" stay different).
+    unambiguous = json.dumps([issuer, subject, key], separators=(",", ":"))
+    # The hash gives a fixed 64-character key whatever the input length (DynamoDB keys are limited).
+    return hashlib.sha256(unambiguous.encode("utf-8")).hexdigest()
+
+
 def request_fingerprint(lines: tuple[OrderLine, ...]) -> str:
     """Stable hash of the normalized request; equal requests produce equal fingerprints."""
     canonical = json.dumps([[line.product_id, line.quantity] for line in lines], separators=(",", ":"))

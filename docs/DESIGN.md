@@ -7,7 +7,7 @@ Backend: **Python**, Lambda runtime `python3.13`. Infrastructure: **AWS SAM**. A
 | Service | Routes | Owns | IAM |
 |---|---|---|---|
 | **Catalog** (`services/catalog`) | `/products` | `CatalogTable` (key `productId`) | `GetItem`, `Scan` on CatalogTable |
-| **Orders** (`services/orders`) | `/orders` | `OrdersTable` (key `pk`: `ORDER#<id>` and `IDEMPOTENCY#<key>`) | `GetItem`, `PutItem`, `ConditionCheckItem` on OrdersTable |
+| **Orders** (`services/orders`) | `/orders` | `OrdersTable` (key `pk`: `ORDER#<id>` and `IDEMPOTENCY#<scoped key>`) | `GetItem`, `PutItem`, `ConditionCheckItem` on OrdersTable |
 
 Orders never reads CatalogTable. It gets current prices and availability with `GET /products/{productId}` **through the gateway** over HTTPS.
 
@@ -80,13 +80,14 @@ CORS controls which browser origin may read responses; it does not authenticate 
 ## 3. Atomic idempotency
 
 1. Validate the key and the body. Compute a fingerprint: SHA-256 of the normalized lines, sorted by `productId`.
-2. **Before calling Catalog**, run a consistent `GetItem IDEMPOTENCY#<key>`. Expired records are ignored because DynamoDB TTL deletes them asynchronously.
-   * Same fingerprint → 200 with the stored creation result. No repricing and no new order.
-   * Different fingerprint → 409.
+   * Scope the key to the caller: `scoped key = SHA-256(JSON [iss, sub, Idempotency-Key])` (`domain/requests.py` `idempotency_scope_key`). The JSON list quotes each value, so separators inside a value (Auth0 subjects look like `auth0|abc`) cannot make two different callers collide. Two users sending the same header value get two independent records.
+2. **Before calling Catalog**, run a consistent `GetItem IDEMPOTENCY#<scoped key>`. Expired records are ignored because DynamoDB TTL deletes them asynchronously.
+   * Same caller and same fingerprint → 200 with the stored creation result. No repricing and no new order.
+   * Different fingerprint, or a record owned by another principal → 409, without returning the stored response.
 3. Call Catalog, then price the order from Catalog data only.
 4. Run one `TransactWriteItems` with two puts:
    * `Put ORDER#<id>` with `attribute_not_exists(pk)`;
-   * `Put IDEMPOTENCY#<key>` (fingerprint, orderId, exact response JSON, `expiresAt` = now + 24 h) with `attribute_not_exists(pk) OR expiresAt <= :now`.
+   * `Put IDEMPOTENCY#<scoped key>` (fingerprint, orderId, exact response JSON, owner `ownerIss`/`ownerSub`, `expiresAt` = now + `IdempotencyTtlHours`) with `attribute_not_exists(pk) OR expiresAt <= :now`.
 5. If the transaction is cancelled and the record now exists, a concurrent identical submission won. The service re-reads the record and replays it, or returns 409 if the fingerprints differ. Exactly one order is persisted.
 
 Order and record commit together or not at all. Failures before step 4 (validation, product errors, Catalog down) write nothing, so the client can retry with the same key.
@@ -145,7 +146,7 @@ Orders needs the API's URL in its environment. With SAM `HttpApi` events, the ge
   * Every order stores its owner as `ownerIss` + `ownerSub`, taken from the verified token at creation; the request can never set it (unknown fields are rejected) and the API never returns it.
   * Only the owner can read or cancel an order. A missing order, someone else's order and a legacy order without an owner all get the same 404 `ORDER_NOT_FOUND`, so order codes cannot be probed.
   * The cancel write is conditional on the stored owner as well (`ownerIss = :iss AND ownerSub = :sub`), so DynamoDB itself refuses a write by anyone else, even if the service check were bypassed.
-  * With authentication, idempotency keys are scoped per caller.
+  * Idempotency keys are scoped per caller (iss + sub), and a stored creation response is replayed only to the principal that created it (section 3).
   * CORS is not used as access control.
 
 ## 9. Retries

@@ -68,11 +68,16 @@ class Order:
 
 @dataclass(frozen=True)
 class IdempotencyRecord:
-    key: str
-    fingerprint: str
+    key: str                         # the caller-scoped storage key, not the raw Idempotency-Key header
+    fingerprint: str                 # hash of the normalized request it was first used with
     order_id: str
-    response_body: Mapping[str, Any]
+    response_body: Mapping[str, Any]  # the original creation response, returned on replay
     expires_at: int
+    owner_issuer: str                # who sent it; a replay is answered only to the same principal
+    owner_subject: str
+
+    def belongs_to(self, caller: Principal) -> bool:
+        return (self.owner_issuer, self.owner_subject) == (caller.issuer, caller.subject)
 
 
 def build_order(order_id: str, lines: tuple[OrderLine, ...],
