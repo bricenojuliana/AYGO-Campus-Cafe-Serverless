@@ -1,0 +1,348 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Campus Café - serverless ordering application. HTTP API (payload format 2.0) in front of a
+  Catalog Lambda and an Orders Lambda, each owning its own DynamoDB table.
+
+Parameters:
+  FrontendOrigin:
+    Type: String
+    Default: http://localhost:8080
+    AllowedPattern: "^https?://[A-Za-z0-9.-]+(:[0-9]+)?$"
+    Description: Exact browser origin allowed by CORS (scheme://host[:port], no trailing slash).
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90]
+  LogLevel:
+    Type: String
+    Default: INFO
+    AllowedValues: [DEBUG, INFO, WARNING, ERROR]
+  CatalogTimeoutSeconds:
+    Type: Number
+    Default: 2
+    MinValue: 0.5
+    MaxValue: 4
+    Description: Per-request timeout of the Orders -> Catalog HTTPS call.
+  CatalogMaxAttempts:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 3
+  CatalogBudgetSeconds:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    MaxValue: 8
+    Description: Overall time budget for Catalog lookups in one request (kept below the 12 s Orders timeout).
+  ExecutionRoleArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^(arn:aws[a-zA-Z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+)?$"
+    Description: >-
+      Leave empty to create the least-privilege CatalogRole and OrdersRole. Only for accounts that
+      forbid iam:CreateRole (e.g. AWS Academy Learner Lab): the ARN of an existing role (LabRole)
+      that both functions will use instead. That role is broader than least privilege.
+
+Conditions:
+  CreateServiceRoles: !Equals [!Ref ExecutionRoleArn, ""]
+
+Globals:
+  Function:
+    Runtime: python3.13  # matches the Python available in AWS CloudShell, where sam build runs
+    Architectures: [arm64]
+    MemorySize: 256
+    Environment:
+      Variables:
+        LOG_LEVEL: !Ref LogLevel
+
+Resources:
+  # ---------- Data (each service owns one table) ----------
+  CatalogTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: productId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: productId
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    # Orders survive stack deletion and replacement; delete the table by hand when done.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  # ---------- Logs ----------
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /campus-cafe/${AWS::StackName}/api-access
+      RetentionInDays: !Ref LogRetentionDays
+
+  CatalogLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /campus-cafe/${AWS::StackName}/catalog
+      RetentionInDays: !Ref LogRetentionDays
+
+  OrdersLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /campus-cafe/${AWS::StackName}/orders
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ---------- Execution roles (least privilege: own table + own log group, nothing else) ----------
+  CatalogRole:
+    Type: AWS::IAM::Role
+    Condition: CreateServiceRoles
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: catalog-table-read
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:Scan]
+                Resource: !GetAtt CatalogTable.Arn
+        - PolicyName: catalog-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt CatalogLogGroup.Arn
+
+  OrdersRole:
+    Type: AWS::IAM::Role
+    Condition: CreateServiceRoles
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: orders-table-readwrite
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                # TransactWriteItems is authorized through PutItem/ConditionCheckItem on the table.
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:ConditionCheckItem]
+                Resource: !GetAtt OrdersTable.Arn
+        - PolicyName: orders-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt OrdersLogGroup.Arn
+
+  # ---------- Functions ----------
+  CatalogFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Catalog service - products, prices and availability
+      CodeUri: services/catalog/src
+      Handler: catalog_service.handler.lambda_handler
+      Timeout: 5
+      LoggingConfig:
+        LogGroup: !Ref CatalogLogGroup
+      Environment:
+        Variables:
+          CATALOG_TABLE_NAME: !Ref CatalogTable
+      Role: !If [CreateServiceRoles, !GetAtt CatalogRole.Arn, !Ref ExecutionRoleArn]
+
+  OrdersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Orders service - create, retrieve and cancel orders
+      CodeUri: services/orders/src
+      Handler: orders_service.handler.lambda_handler
+      Timeout: 12
+      LoggingConfig:
+        LogGroup: !Ref OrdersLogGroup
+      Environment:
+        Variables:
+          ORDERS_TABLE_NAME: !Ref OrdersTable
+          # Catalog is reached over HTTPS through this same gateway (GET /products/{productId}).
+          CATALOG_BASE_URL: !Sub https://${CafeHttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}
+          CATALOG_TIMEOUT_SECONDS: !Ref CatalogTimeoutSeconds
+          CATALOG_MAX_ATTEMPTS: !Ref CatalogMaxAttempts
+          CATALOG_BUDGET_SECONDS: !Ref CatalogBudgetSeconds
+          METRICS_NAMESPACE: CampusCafe
+      Role: !If [CreateServiceRoles, !GetAtt OrdersRole.Arn, !Ref ExecutionRoleArn]
+
+  # ---------- HTTP API (payload format 2.0) ----------
+  CafeHttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub ${AWS::StackName}-http-api
+      ProtocolType: HTTP
+      CorsConfiguration:
+        # CORS only tells browsers which origin may read responses; it does not authenticate callers.
+        AllowOrigins: [!Ref FrontendOrigin]
+        AllowMethods: [GET, POST, OPTIONS]
+        AllowHeaders: [content-type, idempotency-key]
+        # No ExposeHeaders: the browser UI reads only response bodies (Location is for API clients).
+        AllowCredentials: false
+        MaxAge: 600
+
+  CafeApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref CafeHttpApi
+      StageName: $default
+      AutoDeploy: true
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 50
+        ThrottlingRateLimit: 20
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: >-
+          {"requestId":"$context.requestId","ip":"$context.identity.sourceIp",
+          "requestTime":"$context.requestTime","routeKey":"$context.routeKey",
+          "status":"$context.status","responseLength":"$context.responseLength",
+          "integrationLatency":"$context.integrationLatency",
+          "integrationError":"$context.integrationErrorMessage"}
+
+  CatalogIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref CafeHttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt CatalogFunction.Arn
+      PayloadFormatVersion: "2.0"
+      TimeoutInMillis: 6000
+
+  OrdersIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref CafeHttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt OrdersFunction.Arn
+      PayloadFormatVersion: "2.0"
+      TimeoutInMillis: 13000
+
+  ListProductsRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref CafeHttpApi
+      RouteKey: GET /products
+      AuthorizationType: NONE  # see "Authentication seam" below
+      Target: !Sub integrations/${CatalogIntegration}
+
+  GetProductRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref CafeHttpApi
+      RouteKey: GET /products/{productId}
+      AuthorizationType: NONE  # see "Authentication seam" below
+      Target: !Sub integrations/${CatalogIntegration}
+
+  CreateOrderRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref CafeHttpApi
+      RouteKey: POST /orders
+      AuthorizationType: NONE  # see "Authentication seam" below
+      Target: !Sub integrations/${OrdersIntegration}
+
+  GetOrderRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref CafeHttpApi
+      RouteKey: GET /orders/{orderId}
+      AuthorizationType: NONE  # see "Authentication seam" below
+      Target: !Sub integrations/${OrdersIntegration}
+
+  CancelOrderRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref CafeHttpApi
+      RouteKey: POST /orders/{orderId}/cancel
+      AuthorizationType: NONE  # see "Authentication seam" below
+      Target: !Sub integrations/${OrdersIntegration}
+
+  # ---------- Authentication seam (not enabled in the workshop baseline) ----------
+  # Authentication is outside the baseline contract. To add it, define a JWT authorizer and switch
+  # the /orders routes to it; Orders already reads requestContext.authorizer.jwt.claims.sub
+  # (orders_service/auth.py) and enforces ownership in OrderService. CORS is not authentication.
+  #
+  # OrdersJwtAuthorizer:
+  #   Type: AWS::ApiGatewayV2::Authorizer
+  #   Properties:
+  #     ApiId: !Ref CafeHttpApi
+  #     AuthorizerType: JWT
+  #     IdentitySource: [$request.header.Authorization]
+  #     JwtConfiguration: {Issuer: <issuer URL>, Audience: [<client id>]}
+  #     Name: orders-jwt
+  # and on each /orders route: AuthorizationType: JWT, AuthorizerId: !Ref OrdersJwtAuthorizer
+  # (also add "authorization" to CorsConfiguration.AllowHeaders).
+
+  CatalogInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref CatalogFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${CafeHttpApi}/*/GET/products*
+
+  OrdersInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref OrdersFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${CafeHttpApi}/*/*/orders*
+
+Outputs:
+  ExecutionRoleMode:
+    Description: Which execution roles the functions use
+    Value: !If [CreateServiceRoles, "least-privilege CatalogRole/OrdersRole", !Sub "shared existing role ${ExecutionRoleArn}"]
+  ApiUrl:
+    Description: Base URL of the HTTP API (put it in frontend/config.js)
+    Value: !Sub https://${CafeHttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}
+  CatalogTableName:
+    Value: !Ref CatalogTable
+  OrdersTableName:
+    Value: !Ref OrdersTable
+  ApiAccessLogGroupName:
+    Value: !Ref ApiAccessLogGroup
+  CatalogLogGroupName:
+    Value: !Ref CatalogLogGroup
+  OrdersLogGroupName:
+    Value: !Ref OrdersLogGroup
+  CatalogFunctionName:
+    Value: !Ref CatalogFunction
+  OrdersFunctionName:
+    Value: !Ref OrdersFunction
