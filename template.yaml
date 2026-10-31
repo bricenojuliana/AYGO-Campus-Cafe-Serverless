@@ -48,6 +48,18 @@ Parameters:
     MinValue: 1
     MaxValue: 168
     Description: How long Orders remembers an Idempotency-Key (a retry after this creates a new order).
+  Auth0Issuer:
+    Type: String
+    AllowedPattern: "^https://[A-Za-z0-9.-]+/$"
+    Description: >-
+      Auth0 issuer exactly as it appears in the token's iss claim, with the trailing slash,
+      e.g. https://your-tenant.us.auth0.com/ (API Gateway compares it as an exact string).
+  Auth0Audience:
+    Type: String
+    MinLength: 1
+    Description: >-
+      Identifier of the Campus Café API registered in Auth0 (the access token's aud), e.g.
+      https://campus-cafe-api. Not the SPA client ID: ID tokens must not be accepted.
   ExecutionRoleArn:
     Type: String
     Default: ""
@@ -226,7 +238,7 @@ Resources:
         # CORS only tells browsers which origin may read responses; it does not authenticate callers.
         AllowOrigins: [!Ref FrontendOrigin]
         AllowMethods: [GET, POST, OPTIONS]
-        AllowHeaders: [content-type, idempotency-key]
+        AllowHeaders: [content-type, idempotency-key, authorization]  # authorization carries the Auth0 access token
         # No ExposeHeaders: the browser UI reads only response bodies (Location is for API clients).
         AllowCredentials: false
         MaxAge: 600
@@ -247,7 +259,8 @@ Resources:
           "requestTime":"$context.requestTime","routeKey":"$context.routeKey",
           "status":"$context.status","responseLength":"$context.responseLength",
           "integrationLatency":"$context.integrationLatency",
-          "integrationError":"$context.integrationErrorMessage"}
+          "integrationError":"$context.integrationErrorMessage",
+          "authorizerError":"$context.authorizer.error"}
 
   CatalogIntegration:
     Type: AWS::ApiGatewayV2::Integration
@@ -272,7 +285,7 @@ Resources:
     Properties:
       ApiId: !Ref CafeHttpApi
       RouteKey: GET /products
-      AuthorizationType: NONE  # see "Authentication seam" below
+      AuthorizationType: NONE  # products are public and synthetic
       Target: !Sub integrations/${CatalogIntegration}
 
   GetProductRoute:
@@ -280,7 +293,7 @@ Resources:
     Properties:
       ApiId: !Ref CafeHttpApi
       RouteKey: GET /products/{productId}
-      AuthorizationType: NONE  # see "Authentication seam" below
+      AuthorizationType: NONE  # public: also how Orders reads prices, without a token
       Target: !Sub integrations/${CatalogIntegration}
 
   CreateOrderRoute:
@@ -288,7 +301,9 @@ Resources:
     Properties:
       ApiId: !Ref CafeHttpApi
       RouteKey: POST /orders
-      AuthorizationType: NONE  # see "Authentication seam" below
+      AuthorizationType: JWT
+      AuthorizerId: !Ref OrdersJwtAuthorizer
+      AuthorizationScopes: [orders:create]
       Target: !Sub integrations/${OrdersIntegration}
 
   GetOrderRoute:
@@ -296,7 +311,9 @@ Resources:
     Properties:
       ApiId: !Ref CafeHttpApi
       RouteKey: GET /orders/{orderId}
-      AuthorizationType: NONE  # see "Authentication seam" below
+      AuthorizationType: JWT
+      AuthorizerId: !Ref OrdersJwtAuthorizer
+      AuthorizationScopes: [orders:read]
       Target: !Sub integrations/${OrdersIntegration}
 
   CancelOrderRoute:
@@ -304,24 +321,28 @@ Resources:
     Properties:
       ApiId: !Ref CafeHttpApi
       RouteKey: POST /orders/{orderId}/cancel
-      AuthorizationType: NONE  # see "Authentication seam" below
+      AuthorizationType: JWT
+      AuthorizerId: !Ref OrdersJwtAuthorizer
+      AuthorizationScopes: [orders:cancel]
       Target: !Sub integrations/${OrdersIntegration}
 
-  # ---------- Authentication seam (not enabled in the workshop baseline) ----------
-  # Authentication is outside the baseline contract. To add it, define a JWT authorizer and switch
-  # the /orders routes to it; Orders already reads requestContext.authorizer.jwt.claims.sub
-  # (orders_service/api/auth.py) and enforces ownership in OrderService. CORS is not authentication.
-  #
-  # OrdersJwtAuthorizer:
-  #   Type: AWS::ApiGatewayV2::Authorizer
-  #   Properties:
-  #     ApiId: !Ref CafeHttpApi
-  #     AuthorizerType: JWT
-  #     IdentitySource: [$request.header.Authorization]
-  #     JwtConfiguration: {Issuer: <issuer URL>, Audience: [<client id>]}
-  #     Name: orders-jwt
-  # and on each /orders route: AuthorizationType: JWT, AuthorizerId: !Ref OrdersJwtAuthorizer
-  # (also add "authorization" to CorsConfiguration.AllowHeaders).
+  # ---------- Authentication: Auth0 access tokens on the Orders routes ----------
+  # API Gateway validates the token before invoking Orders: RS256 signature against the issuer's
+  # published keys (JWKS), iss, aud (the API identifier, so ID tokens are rejected), exp/nbf, and the
+  # route's scope. Invalid or missing token -> 401; missing scope -> 403; Orders is not invoked.
+  # Orders then trusts only requestContext.authorizer.jwt.claims (orders_service/api/auth.py) and
+  # checks the scope again. CORS is not authentication; preflight requests are answered by the CORS
+  # configuration above, without the authorizer.
+  OrdersJwtAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref CafeHttpApi
+      Name: orders-auth0-jwt
+      AuthorizerType: JWT
+      IdentitySource: [$request.header.Authorization]
+      JwtConfiguration:
+        Issuer: !Ref Auth0Issuer
+        Audience: [!Ref Auth0Audience]
 
   CatalogInvokePermission:
     Type: AWS::Lambda::Permission

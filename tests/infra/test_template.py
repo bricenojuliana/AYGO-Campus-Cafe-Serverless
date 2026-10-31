@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from orders_service.api.auth import ROUTE_SCOPES
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -59,9 +61,45 @@ def test_routes_match_the_contract(resources):
     }
 
 
-def test_routes_declare_authorization_explicitly(resources):
-    for route in of_type(resources, "AWS::ApiGatewayV2::Route").values():
-        assert route["Properties"]["AuthorizationType"] == "NONE"
+def test_products_are_public_and_each_orders_route_needs_the_jwt_and_its_scope(resources):
+    """The gateway requires exactly the scopes the Orders handler checks again (api/auth.py ROUTE_SCOPES)."""
+    routes = {r["Properties"]["RouteKey"]: r["Properties"] for r in of_type(resources, "AWS::ApiGatewayV2::Route").values()}
+    for key in ("GET /products", "GET /products/{productId}"):
+        assert routes[key]["AuthorizationType"] == "NONE"
+        assert "AuthorizerId" not in routes[key] and "AuthorizationScopes" not in routes[key]
+    orders = {key: route for key, route in routes.items() if key.split(" ", 1)[1].startswith("/orders")}
+    assert {key: route["AuthorizationScopes"] for key, route in orders.items()} == \
+        {key: [scope] for key, scope in ROUTE_SCOPES.items()}
+    for route in orders.values():
+        assert route["AuthorizationType"] == "JWT"
+        assert route["AuthorizerId"] == {"Ref": "OrdersJwtAuthorizer"}
+
+
+def test_no_catch_all_route_could_skip_the_authorizer(resources):
+    keys = {r["Properties"]["RouteKey"] for r in of_type(resources, "AWS::ApiGatewayV2::Route").values()}
+    assert "$default" not in keys
+    assert not any(key.startswith(("ANY ", "OPTIONS ")) or "{proxy+}" in key for key in keys)
+
+
+def test_authorizer_accepts_only_auth0_access_tokens_for_this_api(template, resources):
+    authorizers = of_type(resources, "AWS::ApiGatewayV2::Authorizer")
+    assert list(authorizers) == ["OrdersJwtAuthorizer"]
+    props = authorizers["OrdersJwtAuthorizer"]["Properties"]
+    assert props["AuthorizerType"] == "JWT"
+    assert props["IdentitySource"] == ["$request.header.Authorization"]
+    assert props["JwtConfiguration"] == {"Issuer": {"Ref": "Auth0Issuer"}, "Audience": [{"Ref": "Auth0Audience"}]}
+    params = template["Parameters"]
+    issuer = re.compile(params["Auth0Issuer"]["AllowedPattern"])
+    assert issuer.match("https://campus-cafe.us.auth0.com/")
+    for bad in ("https://campus-cafe.us.auth0.com", "http://campus-cafe.us.auth0.com/", "campus-cafe.us.auth0.com"):
+        assert not issuer.match(bad)  # exact iss string: https and the trailing slash matter
+    assert "Default" not in params["Auth0Issuer"] and "Default" not in params["Auth0Audience"]
+
+
+def test_adding_authentication_created_no_iam_resources(resources):
+    """Authentication lives in API Gateway and Auth0: no new roles, policies or broadened grants."""
+    iam = {name for name, r in resources.items() if r["Type"].startswith("AWS::IAM::")}
+    assert iam == {"CatalogRole", "OrdersRole"}
 
 
 def test_no_sam_api_events_that_would_bypass_the_explicit_api(resources):
@@ -108,8 +146,8 @@ def test_least_privilege_roles_are_the_default_and_a_shared_role_is_opt_in(templ
     for role in ("CatalogRole", "OrdersRole"):
         assert resources[role]["Condition"] == "CreateServiceRoles"
     pattern = re.compile(parameter["AllowedPattern"])
-    assert pattern.match("") and pattern.match("arn:aws:iam::543227573135:role/LabRole")
-    for bad in ("LabRole", "arn:aws:iam::123:role/LabRole", "arn:aws:iam::543227573135:user/someone"):
+    assert pattern.match("") and pattern.match("arn:aws:iam::123456789012:role/LabRole")
+    for bad in ("LabRole", "arn:aws:iam::123:role/LabRole", "arn:aws:iam::123456789012:user/someone"):
         assert not pattern.match(bad)
 
 
@@ -122,7 +160,7 @@ def test_orders_table_is_retained_and_has_ttl(resources):
 def test_cors_is_scoped_to_the_frontend(resources):
     cors = resources["CafeHttpApi"]["Properties"]["CorsConfiguration"]
     assert cors["AllowOrigins"] == [{"Ref": "FrontendOrigin"}]
-    assert sorted(cors["AllowHeaders"]) == ["content-type", "idempotency-key"]
+    assert sorted(cors["AllowHeaders"]) == ["authorization", "content-type", "idempotency-key"]
     assert "ExposeHeaders" not in cors  # the UI reads no response headers
     assert cors["AllowCredentials"] is False
 
@@ -150,6 +188,12 @@ def test_settings_come_from_parameters_not_from_code(template, resources):
     assert "METRICS_NAMESPACE" not in orders  # a constant in api/observability.py, the same everywhere
     assert template["Parameters"]["Currency"]["AllowedPattern"] == "^[A-Z]{3}$"
     assert template["Outputs"]["Currency"]["Value"] == {"Ref": "Currency"}  # read by scripts/seed_catalog.py
+
+
+def test_access_log_records_authorizer_errors_but_never_the_token(resources):
+    log_format = resources["CafeApiStage"]["Properties"]["AccessLogSettings"]["Format"]
+    assert "$context.authorizer.error" in log_format
+    assert "$request.header" not in log_format and "authorization" not in log_format.lower().replace("authorizer", "")
 
 
 def test_access_logs_and_function_logs_are_configured(resources):

@@ -2,7 +2,7 @@ Outputs
 ----------------------------------------------------------------------------------------------------
 Key                 ExecutionRoleMode
 Description         Which execution roles the functions use
-Value               shared existing role arn:aws:iam::543227573135:role/LabRole
+Value               shared existing role arn:aws:iam::<aws-account-id>:role/LabRole
 
 Key                 ApiAccessLogGroupName
 Description         -
