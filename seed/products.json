@@ -1,0 +1,12 @@
+[
+  {"productId": "382501b6-8968-4ca8-add5-961d414d5bb9", "name": "Café tinto", "priceCents": 200000, "currency": "COP", "available": true},
+  {"productId": "db423524-1e20-4bdf-a8e7-524d7924e2a5", "name": "Café con leche", "priceCents": 350000, "currency": "COP", "available": true},
+  {"productId": "835aac5b-1d2c-4d46-8566-adbf0a9b8685", "name": "Aromática", "priceCents": 200000, "currency": "COP", "available": true},
+  {"productId": "bba3f3b6-77bd-4f9a-a38c-70239fd08a73", "name": "Chocolate santafereño", "priceCents": 600000, "currency": "COP", "available": true},
+  {"productId": "5fb5081b-e580-4651-9f8f-d5372b4ef059", "name": "Empanada", "priceCents": 300000, "currency": "COP", "available": true},
+  {"productId": "db7f45e1-4b4a-4ed8-bbf6-83bfd24a853b", "name": "Arepa de queso", "priceCents": 450000, "currency": "COP", "available": true},
+  {"productId": "601e1bd9-e903-4a7d-a69d-9f0dbe67ea37", "name": "Pandebono", "priceCents": 250000, "currency": "COP", "available": true},
+  {"productId": "d02b473a-32de-4903-9e95-cbc447b3f07d", "name": "Buñuelo", "priceCents": 250000, "currency": "COP", "available": true},
+  {"productId": "6ea4a739-ffff-4dff-b418-d24ae1b4506c", "name": "Almojábana", "priceCents": 250000, "currency": "COP", "available": true},
+  {"productId": "3652aa12-2434-4ea6-8083-d18554ec0106", "name": "Jugo de lulo", "priceCents": 500000, "currency": "COP", "available": false}
+]
