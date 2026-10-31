@@ -22,4 +22,4 @@ Notes:
 
 * **Least privilege at runtime.** In the Learner Lab the functions use the shared `LabRole`, because the lab forbids `iam:CreateRole` (see README §2.3). The least-privilege roles in `template.yaml` are checked by `tests/infra/test_template.py` but were never deployed.
 * **Real concurrency in local tests.** moto does not isolate DynamoDB transactions across threads, so concurrent creation is verified only against AWS (both runs above).
-* **Browser journey.** The UI was checked against the deployed API for the menu and the order lookup only. Submitting, reloading, retrying and cancelling from the browser are covered by the API checks above, not by an automated UI test.
+* **Browser journey.** Shown in the [demo video](demo-ui.webm). There is no automated UI test; the behavior behind each step of the demonstration (replay with the same key, key conflict, unavailable product, repeated cancellation) is checked against the deployed API by the smoke run.
