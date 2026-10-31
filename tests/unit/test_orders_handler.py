@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import pytest
 
 from events import TEST_CLAIMS, http_api_event
-from fakes import FakeCatalog, InMemoryOrderRepository
+from fakes import CURRENCY, FakeCatalog, IDEMPOTENCY_TTL_SECONDS, InMemoryOrderRepository
 from orders_service.application.service import OrderService
 from orders_service.handler import catalog_deadline, handle
 
@@ -18,7 +18,7 @@ BODY = {"items": [{"productId": "0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", "quantit
 def service():
     ids = (f"CC-0000-{n:04d}" for n in itertools.count(1))
     return OrderService(InMemoryOrderRepository(), FakeCatalog(), id_factory=lambda: next(ids),
-                        clock=lambda: datetime(2026, 10, 24, 14, tzinfo=timezone.utc))
+                        clock=lambda: datetime(2026, 10, 24, 14, tzinfo=timezone.utc), currency=CURRENCY, idempotency_ttl_seconds=IDEMPOTENCY_TTL_SECONDS)
 
 
 def create_event(body=BODY, key="demo-order-001"):
@@ -77,7 +77,7 @@ def test_conflicting_key_is_409(service):
 
 
 def test_catalog_failure_is_503():
-    service = OrderService(InMemoryOrderRepository(), FakeCatalog(fail=True), id_factory=lambda: "CC-XXXX-XXXX")
+    service = OrderService(InMemoryOrderRepository(), FakeCatalog(fail=True), id_factory=lambda: "CC-XXXX-XXXX", currency=CURRENCY, idempotency_ttl_seconds=IDEMPOTENCY_TTL_SECONDS)
     response, body = call(create_event(), service)
     assert (response["statusCode"], body["code"]) == (503, "CATALOG_UNAVAILABLE")
 

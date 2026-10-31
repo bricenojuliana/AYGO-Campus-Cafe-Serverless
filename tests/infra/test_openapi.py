@@ -9,6 +9,7 @@ import yaml
 from openapi_spec_validator import validate as validate_openapi
 
 from catalog_service.domain.product import product_from_record
+from fakes import CURRENCY
 from orders_service.api.responses import ERROR_STATUS
 from orders_service.domain import requests
 from orders_service.domain.ids import new_order_id
@@ -56,13 +57,13 @@ def test_contract_status_codes_are_documented(spec):
 
 def test_seed_products_match_the_product_schema(spec):
     for record in json.loads((ROOT / "seed/products.json").read_text()):
-        jsonschema.validate(product_from_record(record).to_api(), schema(spec, "Product"))
+        jsonschema.validate(product_from_record(record, CURRENCY).to_api(), schema(spec, "Product"))
 
 
 def test_created_and_cancelled_orders_match_the_order_schema(spec):
     product = CatalogProduct("382501b6-8968-4ca8-add5-961d414d5bb9", "Café tinto", 200000, "COP", True)
     order = build_order(new_order_id(), [OrderLine(product.product_id, 2)], {product.product_id: product},
-                        "2026-10-31T03:18:55Z")
+                        "2026-10-31T03:18:55Z", currency=CURRENCY)
     jsonschema.validate(order.to_api(), schema(spec, "Order"))
     jsonschema.validate(cancelled(order, "2026-10-31T03:20:00Z").to_api(), schema(spec, "Order"))
 

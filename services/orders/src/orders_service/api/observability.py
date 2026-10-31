@@ -1,7 +1,9 @@
 """Structured request logs and CloudWatch Embedded Metric Format metrics."""
 import json
-import os
 import time
+
+# CloudWatch namespace for the Embedded Metric Format lines. Same in every deployment, so a constant.
+METRICS_NAMESPACE = "CampusCafe"
 
 OPERATIONS = {
     "POST /orders": "CreateOrder",
@@ -35,11 +37,10 @@ def request_log(event: dict, context, response: dict, started: float) -> dict:
 
 
 def emit_metric(name: str, value: float = 1, unit: str = "Count") -> None:
-    namespace = os.environ.get("METRICS_NAMESPACE", "CampusCafe")
     print(json.dumps({
         "_aws": {
             "Timestamp": int(time.time() * 1000),
-            "CloudWatchMetrics": [{"Namespace": namespace, "Dimensions": [["Service"]],
+            "CloudWatchMetrics": [{"Namespace": METRICS_NAMESPACE, "Dimensions": [["Service"]],
                                    "Metrics": [{"Name": name, "Unit": unit}]}],
         },
         "Service": "orders",

@@ -14,21 +14,22 @@ class StoreUnavailable(Exception):
 
 
 class DynamoProductRepository:
-    def __init__(self, table):
+    def __init__(self, table, currency: str):
         self._table = table
+        self._currency = currency  # records in any other currency are treated as invalid
 
     @classmethod
-    def from_table_name(cls, table_name: str) -> "DynamoProductRepository":
+    def from_table_name(cls, table_name: str, currency: str) -> "DynamoProductRepository":
         import boto3
 
-        return cls(boto3.resource("dynamodb").Table(table_name))
+        return cls(boto3.resource("dynamodb").Table(table_name), currency)
 
     def get(self, product_id: str) -> Optional[Product]:
         try:
             item = self._table.get_item(Key={"productId": product_id}).get("Item")
         except (BotoCoreError, ClientError) as exc:
             raise StoreUnavailable(str(exc)) from exc
-        return product_from_record(item) if item else None
+        return product_from_record(item, self._currency) if item else None
 
     def list_all(self) -> list[Product]:
         # The menu is small (tens of products); a paginated Scan is adequate here.
@@ -39,7 +40,7 @@ class DynamoProductRepository:
                 page = self._table.scan(**kwargs)
                 for item in page.get("Items", []):
                     try:
-                        products.append(product_from_record(item))
+                        products.append(product_from_record(item, self._currency))
                     except InvalidProduct:
                         logger.warning("skipping invalid product record %s", item.get("productId"))
                 if "LastEvaluatedKey" not in page:

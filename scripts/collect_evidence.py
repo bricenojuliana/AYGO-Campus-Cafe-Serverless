@@ -200,7 +200,11 @@ def main():
 
     # ---------------- Security ----------------
     r.h("Security — browser configuration and role policies")
-    config_js = (ROOT / "frontend" / "config.js").read_text()
+    # config.js is generated per deployment and not committed; fall back to the committed example.
+    config_path = next(p for p in (ROOT / "frontend" / "config.js", ROOT / "frontend" / "config.example.js")
+                       if p.exists())
+    r.line(f"- Inspected `frontend/{config_path.name}`")
+    config_js = config_path.read_text()
     code = "\n".join(line for line in config_js.splitlines() if not line.strip().startswith("//"))
     has_key = re.search(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b", code) or re.search(r"(?i)secret\w*\s*[:=]", code)
     without_strings = re.sub(r"\"[^\"]*\"|'[^']*'", '""', code)

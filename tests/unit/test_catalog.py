@@ -8,9 +8,10 @@ from catalog_service.domain.product import (InvalidProduct, InvalidProductId, Pr
                                             product_to_record, sort_for_menu, validate_product_id)
 from catalog_service.handler import handle
 from events import http_api_event
+from fakes import CURRENCY
 
-COFFEE = Product("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", "Coffee", 350, True)
-MUFFIN = Product("4f7b0e5c-6a8b-4c23-9e5f-7a9b1c3d5e6f", "Blueberry muffin", 425, False)
+COFFEE = Product("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", "Coffee", 350, True, CURRENCY)
+MUFFIN = Product("4f7b0e5c-6a8b-4c23-9e5f-7a9b1c3d5e6f", "Blueberry muffin", 425, False, CURRENCY)
 
 
 class FakeRepository:
@@ -56,7 +57,7 @@ def test_invalid_product_ids(value):
 
 def test_record_round_trip_with_dynamodb_decimals():
     record = {**product_to_record(COFFEE), "priceCents": Decimal("350")}
-    assert product_from_record(record) == COFFEE
+    assert product_from_record(record, CURRENCY) == COFFEE
 
 
 @pytest.mark.parametrize("override", [
@@ -68,14 +69,14 @@ def test_record_round_trip_with_dynamodb_decimals():
 ])
 def test_records_breaking_invariants_are_rejected(override):
     with pytest.raises(InvalidProduct):
-        product_from_record({**product_to_record(COFFEE), **override})
+        product_from_record({**product_to_record(COFFEE), **override}, CURRENCY)
 
 
 def test_record_without_availability_is_rejected():
     record = product_to_record(COFFEE)
     del record["available"]
     with pytest.raises(InvalidProduct):
-        product_from_record(record)
+        product_from_record(record, CURRENCY)
 
 
 def test_menu_is_sorted_by_name():

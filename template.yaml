@@ -35,6 +35,19 @@ Parameters:
     MinValue: 1
     MaxValue: 8
     Description: Overall time budget for Catalog lookups in one request (kept below the 12 s Orders timeout).
+  Currency:
+    Type: String
+    Default: COP
+    AllowedPattern: "^[A-Z]{3}$"
+    Description: >-
+      The application's single ISO 4217 currency. Prices are integer minor units in this currency;
+      Catalog records and Catalog answers in any other currency are rejected.
+  IdempotencyTtlHours:
+    Type: Number
+    Default: 24
+    MinValue: 1
+    MaxValue: 168
+    Description: How long Orders remembers an Idempotency-Key (a retry after this creates a new order).
   ExecutionRoleArn:
     Type: String
     Default: ""
@@ -55,6 +68,7 @@ Globals:
     Environment:
       Variables:
         LOG_LEVEL: !Ref LogLevel
+        CURRENCY: !Ref Currency
 
 Resources:
   # ---------- Data (each service owns one table) ----------
@@ -199,7 +213,7 @@ Resources:
           CATALOG_TIMEOUT_SECONDS: !Ref CatalogTimeoutSeconds
           CATALOG_MAX_ATTEMPTS: !Ref CatalogMaxAttempts
           CATALOG_BUDGET_SECONDS: !Ref CatalogBudgetSeconds
-          METRICS_NAMESPACE: CampusCafe
+          IDEMPOTENCY_TTL_HOURS: !Ref IdempotencyTtlHours
       Role: !If [CreateServiceRoles, !GetAtt OrdersRole.Arn, !Ref ExecutionRoleArn]
 
   # ---------- HTTP API (payload format 2.0) ----------
@@ -326,6 +340,9 @@ Resources:
       SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${CafeHttpApi}/*/*/orders*
 
 Outputs:
+  Currency:
+    Description: The application's currency (read by scripts/seed_catalog.py to validate the seed)
+    Value: !Ref Currency
   ExecutionRoleMode:
     Description: Which execution roles the functions use
     Value: !If [CreateServiceRoles, "least-privilege CatalogRole/OrdersRole", !Sub "shared existing role ${ExecutionRoleArn}"]

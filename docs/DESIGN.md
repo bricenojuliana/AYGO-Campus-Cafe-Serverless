@@ -30,6 +30,8 @@ catalog_service/
 
 Business errors carry only a `code` and a `message`; `api/responses.py` is the single place that maps each one to a standard `HTTPStatus` (and headers such as `WWW-Authenticate`).
 
+Configuration has one source. Every value that can differ between deployments is a `template.yaml` parameter passed as an environment variable: table names, Catalog URL, timeouts and attempts, `Currency`, `IdempotencyTtlHours`, log level. The handlers read them with `required_env` and stop at init if one is missing, instead of falling back to a default that could drift from the template. `LOG_LEVEL` is the one exception: it defaults to `INFO`, so a logging setting can never keep the function from starting. Values that are design rules rather than settings stay as named constants in code (order limits, retry counts, the metrics namespace).
+
 ### How the two services can evolve independently
 
 Both services are deployed by one template for this exercise, but nothing ties them together except the public HTTP contract:
@@ -131,7 +133,7 @@ Orders needs the API's URL in its environment. With SAM `HttpApi` events, the ge
 
 ## 8. Security and the authentication seam
 
-* The browser holds no AWS credentials. `frontend/config.js` contains only the API URL.
+* The browser holds no AWS credentials. `frontend/config.js` contains only the API URL; it is generated per deployment from `config.example.js` and not committed.
 * By default each function has an explicit IAM role with inline policies scoped to its own table and its own log group. There are no AWS-managed policies.
 * Accounts that forbid `iam:CreateRole` (AWS Academy Learner Lab) set `ExecutionRoleArn` to the pre-existing `LabRole`. The scoped roles are then not created, and both functions run with that broader role.
   * Least privilege at runtime is therefore **not** met in the lab. The template still encodes the intended policy, and it is the default.

@@ -56,8 +56,11 @@ def main():
     for product in json.loads((ROOT / "seed/products.json").read_text()):
         table.put_item(Item=product)
 
+    # Same settings template.yaml gives the deployed functions (template defaults).
     os.environ.update({"CATALOG_TABLE_NAME": "catalog", "ORDERS_TABLE_NAME": "orders",
-                       "CATALOG_BASE_URL": f"http://127.0.0.1:{args.api_port}"})
+                       "CATALOG_BASE_URL": f"http://127.0.0.1:{args.api_port}",
+                       "CATALOG_TIMEOUT_SECONDS": "2", "CATALOG_MAX_ATTEMPTS": "2", "CATALOG_BUDGET_SECONDS": "5",
+                       "CURRENCY": "COP", "IDEMPOTENCY_TTL_HOURS": "24"})
     from catalog_service import handler as catalog_handler
     from orders_service import handler as orders_handler
     handlers = {"catalog": catalog_handler.lambda_handler, "orders": orders_handler.lambda_handler}

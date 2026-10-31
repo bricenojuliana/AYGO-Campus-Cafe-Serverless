@@ -7,6 +7,10 @@ from orders_service.application.ports import IdempotencyKeyTaken, OrderIdTaken, 
 from orders_service.domain.errors import CatalogUnavailable
 from orders_service.domain.order import CatalogProduct
 
+# Deployment settings as template.yaml passes them to the functions (Currency, IdempotencyTtlHours).
+CURRENCY = "COP"
+IDEMPOTENCY_TTL_SECONDS = 24 * 3600
+
 PRODUCTS = {
     "0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b": CatalogProduct("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", "Coffee", 350, "COP", True),
     "1c4e7b2f-3d5e-4f90-8b2c-4d6e8f0a2b3c": CatalogProduct("1c4e7b2f-3d5e-4f90-8b2c-4d6e8f0a2b3c", "Croissant", 275, "COP", True),

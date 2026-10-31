@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from fakes import FakeCatalog, InMemoryOrderRepository
+from fakes import CURRENCY, FakeCatalog, IDEMPOTENCY_TTL_SECONDS, InMemoryOrderRepository
 from orders_service.application.service import OrderService
 from orders_service.domain.errors import (CatalogUnavailable, IdempotencyConflict, MissingIdempotencyKey,
                                           OrderNotFound, ProductUnavailable, UnknownProduct)
@@ -18,7 +18,7 @@ def make_service(catalog=None, repository=None):
     ids = (f"CC-0000-{n:04d}" for n in itertools.count(1))
     clock = lambda: datetime(2026, 10, 24, 14, 0, 0, tzinfo=timezone.utc)
     return OrderService(repository or InMemoryOrderRepository(), catalog or FakeCatalog(),
-                        id_factory=lambda: next(ids), clock=clock)
+                        id_factory=lambda: next(ids), clock=clock, currency=CURRENCY, idempotency_ttl_seconds=IDEMPOTENCY_TTL_SECONDS)
 
 
 def deadline():

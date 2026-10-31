@@ -25,7 +25,7 @@ class _Retryable(Exception):
 
 
 class HttpCatalogClient:
-    def __init__(self, base_url: str, timeout_seconds: float = 2.0, max_attempts: int = 2,
+    def __init__(self, base_url: str, *, timeout_seconds: float, max_attempts: int,
                  backoff_seconds: float = 0.1, max_workers: int = 5, opener=None):
         if not base_url.startswith(("https://", "http://")):
             raise ValueError("Catalog base URL must be http(s)")

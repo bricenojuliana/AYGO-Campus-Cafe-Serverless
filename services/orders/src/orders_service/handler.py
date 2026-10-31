@@ -20,33 +20,43 @@ SAFETY_MARGIN_SECONDS = 1.0
 _service = None
 
 
+def required_env(name: str) -> str:
+    """Settings come only from template.yaml. A missing one stops the function instead of using a guess."""
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Missing environment variable {name}; it is set by template.yaml.")
+    return value
+
+
 def _default_service():
     global _service
     if _service is None:
         from .adapters.catalog_http_client import HttpCatalogClient
-        from .domain.ids import new_order_id
         from .adapters.dynamodb_repository import DynamoOrderRepository
         from .application.service import OrderService
+        from .domain.ids import new_order_id
 
         catalog = HttpCatalogClient(
-            os.environ["CATALOG_BASE_URL"],
-            timeout_seconds=float(os.environ.get("CATALOG_TIMEOUT_SECONDS", "2")),
-            max_attempts=int(os.environ.get("CATALOG_MAX_ATTEMPTS", "2")),
+            required_env("CATALOG_BASE_URL"),
+            timeout_seconds=float(required_env("CATALOG_TIMEOUT_SECONDS")),
+            max_attempts=int(required_env("CATALOG_MAX_ATTEMPTS")),
         )
-        repository = DynamoOrderRepository.from_table_name(os.environ["ORDERS_TABLE_NAME"])
-        _service = OrderService(repository, catalog, id_factory=new_order_id)
+        repository = DynamoOrderRepository.from_table_name(required_env("ORDERS_TABLE_NAME"))
+        _service = OrderService(repository, catalog, id_factory=new_order_id,
+                                currency=required_env("CURRENCY"),
+                                idempotency_ttl_seconds=int(required_env("IDEMPOTENCY_TTL_HOURS")) * 3600)
     return _service
 
 
 # Build the AWS clients in the Lambda init phase (reported as Init Duration) instead of inside the
-# first request. Skipped when the environment is not configured, e.g. when unit tests import this module.
-if os.environ.get("ORDERS_TABLE_NAME") and os.environ.get("CATALOG_BASE_URL"):
+# first request, and fail there if a setting is missing. Skipped when unit tests import this module.
+if os.environ.get("ORDERS_TABLE_NAME"):
     _default_service()
 
 
 def catalog_deadline(context) -> float:
     """Monotonic deadline for Catalog calls: the configured budget, never past the Lambda timeout."""
-    budget = float(os.environ.get("CATALOG_BUDGET_SECONDS", "5"))
+    budget = float(required_env("CATALOG_BUDGET_SECONDS"))
     if context is not None and hasattr(context, "get_remaining_time_in_millis"):
         budget = min(budget, context.get_remaining_time_in_millis() / 1000 - SAFETY_MARGIN_SECONDS)
     return time.monotonic() + max(budget, 0)

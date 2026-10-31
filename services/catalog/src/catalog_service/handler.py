@@ -16,17 +16,26 @@ logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 _repository = None
 
 
+def required_env(name: str) -> str:
+    """Settings come only from template.yaml. A missing one stops the function instead of using a guess."""
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Missing environment variable {name}; it is set by template.yaml.")
+    return value
+
+
 def _default_repository():
     global _repository
     if _repository is None:
         from .adapters.dynamodb_repository import DynamoProductRepository
 
-        _repository = DynamoProductRepository.from_table_name(os.environ["CATALOG_TABLE_NAME"])
+        _repository = DynamoProductRepository.from_table_name(required_env("CATALOG_TABLE_NAME"),
+                                                              currency=required_env("CURRENCY"))
     return _repository
 
 
 # Build the AWS client in the Lambda init phase (reported as Init Duration) instead of inside the
-# first request. Skipped when the environment is not configured, e.g. when unit tests import this module.
+# first request, and fail there if a setting is missing. Skipped when unit tests import this module.
 if os.environ.get("CATALOG_TABLE_NAME"):
     _default_repository()
 

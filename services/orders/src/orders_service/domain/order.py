@@ -4,7 +4,6 @@ from typing import Any, Mapping, Optional
 
 from .errors import CatalogUnavailable, InvalidRequest, ProductUnavailable, UnknownProduct
 
-CURRENCY = "COP"
 STATUS_CREATED = "CREATED"
 STATUS_CANCELLED = "CANCELLED"
 CANCELLABLE_STATUSES = frozenset({STATUS_CREATED})
@@ -74,9 +73,12 @@ class IdempotencyRecord:
 
 
 def build_order(order_id: str, lines: tuple[OrderLine, ...],
-                products: Mapping[str, Optional[CatalogProduct]], now_iso: str,
-                owner_id: Optional[str] = None) -> Order:
-    """Prices the order from Catalog data only; client input never carries prices."""
+                products: Mapping[str, Optional[CatalogProduct]], now_iso: str, *,
+                currency: str, owner_id: Optional[str] = None) -> Order:
+    """Prices the order from Catalog data only; client input never carries prices.
+
+    `currency` is the application's single currency (deployment setting); Catalog prices in any
+    other currency are rejected instead of being mixed into one total."""
     items = []
     for line in lines:
         product = products.get(line.product_id)
@@ -84,11 +86,11 @@ def build_order(order_id: str, lines: tuple[OrderLine, ...],
             raise UnknownProduct(line.product_id)
         if not product.available:
             raise ProductUnavailable(line.product_id)
-        if product.currency != CURRENCY or product.price_cents < 0:
+        if product.currency != currency or product.price_cents < 0:
             raise CatalogUnavailable("Catalog returned a price this application cannot accept.")
         items.append(OrderItem(product.product_id, product.name, line.quantity, product.price_cents))
     total = sum(item.unit_price_cents * item.quantity for item in items)
-    return Order(order_id, STATUS_CREATED, tuple(items), total, CURRENCY, now_iso, now_iso, owner_id=owner_id)
+    return Order(order_id, STATUS_CREATED, tuple(items), total, currency, now_iso, now_iso, owner_id=owner_id)
 
 
 def can_access(caller_subject: Optional[str], order: Order) -> bool:

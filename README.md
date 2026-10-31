@@ -21,7 +21,7 @@ https://github.com/user-attachments/assets/9d5d8ba3-3dea-425c-a212-0e6836cb9025
 | `samconfig.toml` | stack name and deployment options (no credentials) |
 | `services/catalog/src/catalog_service/` | `handler.py` (2.0 event) → `domain/` (rules), `adapters/` (DynamoDB), `api/` (HTTP responses, logs) |
 | `services/orders/src/orders_service/` | `handler.py` → `application/` (use cases) + `domain/` (rules) → `adapters/` (DynamoDB, Catalog over HTTPS); `api/` (HTTP, auth, logs) |
-| `frontend/` | HTML/CSS/JS; `config.js` holds only the API URL |
+| `frontend/` | HTML/CSS/JS; `config.example.js` is the template for the generated, uncommitted `config.js` (API URL only) |
 | `seed/products.json` | 10 typical Colombian café products (COP in cents: `priceCents` 200000 = $2.000), 1 unavailable (jugo de lulo) |
 | `scripts/` | seed, frontend configuration, local server, smoke test of the deployed API |
 | `tests/` | unit, adapters (moto + local HTTP server), infra (template rules and OpenAPI conformance), `e2e/local_gateway.py` (tests only) |
@@ -134,6 +134,8 @@ In guided mode accept the `campus-cafe` stack and the region, review the paramet
 | `CatalogTimeoutSeconds` | `2` | per-request timeout for Orders → Catalog |
 | `CatalogMaxAttempts` | `2` | maximum attempts per product |
 | `CatalogBudgetSeconds` | `5` | total budget for the Catalog lookup |
+| `Currency` | `COP` | the application's single ISO 4217 currency; prices are integer minor units in it |
+| `IdempotencyTtlHours` | `24` | how long Orders remembers an `Idempotency-Key` |
 | `ExecutionRoleArn` | empty | empty = create the least-privilege roles; `LabRole` ARN = use that existing role (Learner Lab) |
 
 Resulting IAM permissions (least privilege). Each function uses an explicit role (`CatalogRole`, `OrdersRole`) with no AWS managed policies. `AWSLambdaBasicExecutionRole` is not used, because it would allow writing to any log group.
@@ -162,7 +164,7 @@ In CloudShell:
 python3 scripts/seed_catalog.py --stack campus-cafe
 ```
 
-It reads `CatalogTableName` from the stack outputs and validates each product with the same rules as the service.
+It reads `CatalogTableName` and `Currency` from the stack outputs and validates each product with the same rules as the service (a product in another currency is rejected). On a stack deployed before the `Currency` output existed, redeploy or pass `--currency COP`.
 
 ## 4. Verify the deployed API
 
@@ -212,7 +214,7 @@ In CloudShell, copy the API URL:
 aws cloudformation describe-stacks --stack-name campus-cafe --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text
 ```
 
-On your machine, paste it into `frontend/config.js` (`apiBaseUrl: "https://…"`; it is not a secret) and start the interface:
+On your machine, copy `frontend/config.example.js` to `frontend/config.js` and paste the URL into `apiBaseUrl` (it is not a secret). `config.js` belongs to one deployment, so it is in `.gitignore`. Then start the interface:
 
 ```bash
 scripts/serve_frontend.sh

@@ -1,6 +1,6 @@
 import pytest
 
-from fakes import PRODUCTS
+from fakes import CURRENCY, PRODUCTS
 from orders_service.domain.errors import (CatalogUnavailable, InvalidRequest, MissingIdempotencyKey,
                                           ProductUnavailable, UnknownProduct)
 from orders_service.domain.order import CatalogProduct, OrderLine, build_order, cancelled
@@ -52,7 +52,7 @@ def test_fingerprint_ignores_line_order_but_not_quantities():
 
 
 def test_build_order_prices_from_catalog_snapshot():
-    order = build_order("CC-0000-0001", (OrderLine("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", 2), OrderLine("1c4e7b2f-3d5e-4f90-8b2c-4d6e8f0a2b3c", 1)), PRODUCTS, NOW)
+    order = build_order("CC-0000-0001", (OrderLine("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", 2), OrderLine("1c4e7b2f-3d5e-4f90-8b2c-4d6e8f0a2b3c", 1)), PRODUCTS, NOW, currency=CURRENCY)
     assert order.to_api() == {
         "orderId": "CC-0000-0001", "status": "CREATED",
         "items": [{"productId": "0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", "name": "Coffee", "quantity": 2, "unitPriceCents": 350},
@@ -63,19 +63,19 @@ def test_build_order_prices_from_catalog_snapshot():
 
 def test_unknown_and_unavailable_products():
     with pytest.raises(UnknownProduct):
-        build_order("CC-0000-0001", (OrderLine("3e6a9d4b-5f7a-4b12-8d4e-6f8a0b2c4d5e", 1),), PRODUCTS, NOW)
+        build_order("CC-0000-0001", (OrderLine("3e6a9d4b-5f7a-4b12-8d4e-6f8a0b2c4d5e", 1),), PRODUCTS, NOW, currency=CURRENCY)
     with pytest.raises(ProductUnavailable):
-        build_order("CC-0000-0001", (OrderLine("2d5f8c3a-4e6f-4a01-9c3d-5e7f9a1b3c4d", 1),), PRODUCTS, NOW)
+        build_order("CC-0000-0001", (OrderLine("2d5f8c3a-4e6f-4a01-9c3d-5e7f9a1b3c4d", 1),), PRODUCTS, NOW, currency=CURRENCY)
 
 
 def test_foreign_currency_from_catalog_is_a_dependency_failure():
     products = {"0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b": CatalogProduct("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", "Coffee", 350, "EUR", True)}
     with pytest.raises(CatalogUnavailable):
-        build_order("CC-0000-0001", (OrderLine("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", 1),), products, NOW)
+        build_order("CC-0000-0001", (OrderLine("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", 1),), products, NOW, currency=CURRENCY)
 
 
 def test_cancel_transition_and_repeat():
-    order = build_order("CC-0000-0001", (OrderLine("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", 1),), PRODUCTS, NOW)
+    order = build_order("CC-0000-0001", (OrderLine("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", 1),), PRODUCTS, NOW, currency=CURRENCY)
     once = cancelled(order, "2026-10-24T15:00:00Z")
     assert (once.status, once.version, once.updated_at, once.created_at) == ("CANCELLED", 2, "2026-10-24T15:00:00Z", NOW)
     assert cancelled(once, "2026-10-24T16:00:00Z") is once

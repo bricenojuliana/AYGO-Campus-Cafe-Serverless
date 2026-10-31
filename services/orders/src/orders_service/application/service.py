@@ -10,7 +10,6 @@ from ..domain.principal import ANONYMOUS, Principal
 from ..domain.requests import parse_create_request, request_fingerprint, validate_idempotency_key
 from .ports import CatalogClient, IdempotencyKeyTaken, OrderIdTaken, OrderRepository, VersionConflict
 
-IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60
 CANCEL_ATTEMPTS = 3
 ORDER_ID_ATTEMPTS = 3
 
@@ -28,10 +27,13 @@ class CreateOrderResult:
 
 class OrderService:
     def __init__(self, repository: OrderRepository, catalog: CatalogClient,
-                 id_factory: Callable[[], str], clock: Callable[[], datetime] = utc_now):
+                 id_factory: Callable[[], str], *, currency: str, idempotency_ttl_seconds: int,
+                 clock: Callable[[], datetime] = utc_now):
         self._repository = repository
         self._catalog = catalog
         self._new_id = id_factory
+        self._currency = currency
+        self._idempotency_ttl = idempotency_ttl_seconds  # how long a retry with the same key is remembered
         self._clock = clock
 
     def create_order(self, idempotency_key: Optional[str], body: Any, deadline: float,
@@ -49,10 +51,11 @@ class OrderService:
 
         products = self._catalog.get_products([line.product_id for line in lines], deadline)
         for _ in range(ORDER_ID_ATTEMPTS):
-            order = build_order(self._new_id(), lines, products, _iso(now), owner_id=caller.subject)
+            order = build_order(self._new_id(), lines, products, _iso(now), currency=self._currency,
+                                owner_id=caller.subject)
             body_to_store = order.to_api()
             record = IdempotencyRecord(key, fingerprint, order.order_id, body_to_store,
-                                       int(now.timestamp()) + IDEMPOTENCY_TTL_SECONDS)
+                                       int(now.timestamp()) + self._idempotency_ttl)
             try:
                 self._repository.create_order(order, record, int(now.timestamp()))
             except OrderIdTaken:

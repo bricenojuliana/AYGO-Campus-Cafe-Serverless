@@ -139,6 +139,19 @@ def test_orders_calls_catalog_through_the_gateway(template, resources):
     assert resources["OrdersIntegration"]["Properties"]["TimeoutInMillis"] > timeout * 1000
 
 
+def test_settings_come_from_parameters_not_from_code(template, resources):
+    """Each configurable value has one source: a template parameter passed as an environment variable."""
+    shared = template["Globals"]["Function"]["Environment"]["Variables"]
+    assert shared["CURRENCY"] == {"Ref": "Currency"} and shared["LOG_LEVEL"] == {"Ref": "LogLevel"}
+    orders = resources["OrdersFunction"]["Properties"]["Environment"]["Variables"]
+    assert orders["CATALOG_TIMEOUT_SECONDS"] == {"Ref": "CatalogTimeoutSeconds"}
+    assert orders["CATALOG_MAX_ATTEMPTS"] == {"Ref": "CatalogMaxAttempts"}
+    assert orders["IDEMPOTENCY_TTL_HOURS"] == {"Ref": "IdempotencyTtlHours"}
+    assert "METRICS_NAMESPACE" not in orders  # a constant in api/observability.py, the same everywhere
+    assert template["Parameters"]["Currency"]["AllowedPattern"] == "^[A-Z]{3}$"
+    assert template["Outputs"]["Currency"]["Value"] == {"Ref": "Currency"}  # read by scripts/seed_catalog.py
+
+
 def test_access_logs_and_function_logs_are_configured(resources):
     stage = resources["CafeApiStage"]["Properties"]
     assert stage["AccessLogSettings"]["DestinationArn"] == {"GetAtt": "ApiAccessLogGroup.Arn"}

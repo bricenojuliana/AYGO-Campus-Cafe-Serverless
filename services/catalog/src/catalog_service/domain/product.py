@@ -2,7 +2,6 @@
 import re
 from dataclasses import dataclass
 
-CURRENCY = "COP"
 # Product IDs are canonical lowercase UUIDs, e.g. "0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b".
 PRODUCT_ID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
@@ -21,7 +20,7 @@ class Product:
     name: str
     price_cents: int
     available: bool
-    currency: str = CURRENCY
+    currency: str
 
     def to_api(self) -> dict:
         return {
@@ -39,8 +38,10 @@ def validate_product_id(product_id: str) -> str:
     return product_id
 
 
-def product_from_record(record: dict) -> Product:
-    """Builds a Product from a stored record, rejecting records that break catalog invariants."""
+def product_from_record(record: dict, currency: str) -> Product:
+    """Builds a Product from a stored record, rejecting records that break catalog invariants.
+
+    `currency` is the application's single currency (deployment setting)."""
     try:
         price = record["priceCents"]
         if int(price) != price:
@@ -50,7 +51,7 @@ def product_from_record(record: dict) -> Product:
             name=str(record["name"]),
             price_cents=int(price),
             available=bool(record["available"]),
-            currency=str(record.get("currency", CURRENCY)),
+            currency=str(record.get("currency", currency)),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise InvalidProduct(f"invalid product record: {exc}") from exc
@@ -58,8 +59,8 @@ def product_from_record(record: dict) -> Product:
         raise InvalidProduct("priceCents must be >= 0")
     if not product.name.strip():
         raise InvalidProduct("name must not be empty")
-    if product.currency != CURRENCY:
-        raise InvalidProduct(f"currency must be {CURRENCY}")
+    if product.currency != currency:
+        raise InvalidProduct(f"currency must be {currency}")
     return product
 
 

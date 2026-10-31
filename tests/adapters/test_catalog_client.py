@@ -117,7 +117,7 @@ def test_unexpected_payloads_are_dependency_failures(server, payload):
 
 def test_rejects_non_http_base_url():
     with pytest.raises(ValueError):
-        HttpCatalogClient("file:///etc/passwd")
+        HttpCatalogClient("file:///etc/passwd", timeout_seconds=1, max_attempts=1)
 
 
 def test_forwards_the_gateway_request_id_as_correlation_id(server):

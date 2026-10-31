@@ -6,7 +6,7 @@ import time
 import pytest
 
 from events import TEST_CLAIMS, http_api_event
-from fakes import FakeCatalog, InMemoryOrderRepository
+from fakes import CURRENCY, FakeCatalog, IDEMPOTENCY_TTL_SECONDS, InMemoryOrderRepository
 from orders_service.api.auth import principal_from_event
 from orders_service.application.service import OrderService
 from orders_service.domain.errors import OrderNotFound, Unauthenticated
@@ -43,7 +43,7 @@ def catalog():
 @pytest.fixture
 def service(repository, catalog):
     ids = (f"CC-0000-{n:04d}" for n in itertools.count(1))
-    return OrderService(repository, catalog, id_factory=lambda: next(ids))
+    return OrderService(repository, catalog, id_factory=lambda: next(ids), currency=CURRENCY, idempotency_ttl_seconds=IDEMPOTENCY_TTL_SECONDS)
 
 
 @pytest.mark.parametrize("claims", [

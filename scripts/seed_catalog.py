@@ -1,6 +1,6 @@
 """Loads seed/products.json into the deployed Catalog table.
 
-Usage: python scripts/seed_catalog.py [--stack campus-cafe] [--region us-east-1] [--table NAME]
+Usage: python scripts/seed_catalog.py [--stack campus-cafe] [--region us-east-1] [--table NAME] [--currency COP]
 Credentials come from the standard AWS chain (profile, SSO, env); none are stored here.
 """
 import argparse
@@ -18,9 +18,9 @@ from catalog_service.domain.product import product_from_record, product_to_recor
 from stack_outputs import DEFAULT_STACK, stack_outputs  # noqa: E402
 
 
-def load_seed(path: Path) -> list[dict]:
+def load_seed(path: Path, currency: str) -> list[dict]:
     records = json.loads(path.read_text())
-    products = [product_from_record(r) for r in records]  # same invariants the service enforces
+    products = [product_from_record(r, currency) for r in records]  # same invariants the service enforces
     if len(products) < 5 or all(p.available for p in products):
         raise SystemExit("seed must contain at least five products and one unavailable product")
     if len({p.product_id for p in products}) != len(products):
@@ -34,10 +34,15 @@ def main() -> None:
     parser.add_argument("--region")
     parser.add_argument("--table", help="Catalog table name (default: read from stack outputs)")
     parser.add_argument("--file", default=str(ROOT / "seed" / "products.json"))
+    parser.add_argument("--currency", help="application currency (default: the stack's Currency output)")
     args = parser.parse_args()
 
-    records = load_seed(Path(args.file))
-    table_name = args.table or stack_outputs(args.stack, args.region)["CatalogTableName"]
+    outputs = {} if (args.table and args.currency) else stack_outputs(args.stack, args.region)
+    currency = args.currency or outputs.get("Currency")
+    if not currency:
+        raise SystemExit("the stack has no Currency output yet: redeploy it, or pass --currency")
+    records = load_seed(Path(args.file), currency)
+    table_name = args.table or outputs["CatalogTableName"]
     table = boto3.resource("dynamodb", region_name=args.region).Table(table_name)
     with table.batch_writer(overwrite_by_pkeys=["productId"]) as batch:
         for record in records:

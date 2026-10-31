@@ -222,3 +222,4 @@ __marimo__/
 # Campus Café
 .aws-sam/
 samconfig.local.toml
+frontend/config.js

@@ -10,7 +10,7 @@ from moto import mock_aws
 
 from catalog_service.adapters.dynamodb_repository import DynamoProductRepository
 from catalog_service.domain.product import Product, product_to_record
-from fakes import FakeCatalog
+from fakes import CURRENCY, FakeCatalog, IDEMPOTENCY_TTL_SECONDS
 from orders_service.adapters.dynamodb_repository import DynamoOrderRepository
 from orders_service.application.ports import IdempotencyKeyTaken, OrderIdTaken, VersionConflict
 from orders_service.application.service import OrderService
@@ -38,7 +38,7 @@ def orders_repo(aws):
 
 
 def sample_order(order_id="CC-0000-0001"):
-    return build_order(order_id, (OrderLine("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", 2),), FakeCatalog().products, "2026-10-24T14:00:00Z")
+    return build_order(order_id, (OrderLine("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", 2),), FakeCatalog().products, "2026-10-24T14:00:00Z", currency=CURRENCY)
 
 
 def record_for(order, key="demo-order-001", fingerprint="fp", expires_at=NOW + 100):
@@ -50,10 +50,10 @@ def test_catalog_repository_reads_seeded_products(aws):
                      KeySchema=[{"AttributeName": "productId", "KeyType": "HASH"}],
                      AttributeDefinitions=[{"AttributeName": "productId", "AttributeType": "S"}])
     table = boto3.resource("dynamodb").Table("catalog")
-    coffee = Product("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", "Coffee", 350, True)
+    coffee = Product("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", "Coffee", 350, True, CURRENCY)
     table.put_item(Item=product_to_record(coffee))
     table.put_item(Item={"productId": "broken", "name": "", "priceCents": 1, "available": True})
-    repository = DynamoProductRepository(table)
+    repository = DynamoProductRepository(table, CURRENCY)
     assert repository.get("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b") == coffee
     assert repository.get("3e6a9d4b-5f7a-4b12-8d4e-6f8a0b2c4d5e") is None
     assert repository.list_all() == [coffee]  # invalid records are skipped, not served
@@ -106,7 +106,7 @@ def test_conditional_replace_never_creates_and_detects_conflicts(orders_repo):
 def test_service_end_to_end_on_dynamodb(orders_repo):
     ids = (f"CC-0000-{n:04d}" for n in itertools.count(1))
     service = OrderService(orders_repo, FakeCatalog(), id_factory=lambda: next(ids),
-                           clock=lambda: datetime(2026, 10, 24, 14, tzinfo=timezone.utc))
+                           clock=lambda: datetime(2026, 10, 24, 14, tzinfo=timezone.utc), currency=CURRENCY, idempotency_ttl_seconds=IDEMPOTENCY_TTL_SECONDS)
     created = service.create_order("demo-order-001", BODY, time.monotonic() + 5)
     replay = service.create_order("demo-order-001", BODY, time.monotonic() + 5)
     assert replay.replayed and replay.body == created.body
@@ -158,7 +158,7 @@ def test_racing_identical_submissions_persist_one_order(aws, orders_repo):
         with id_lock:
             return next(ids)
 
-    service = OrderService(repository, FakeCatalog(), id_factory=next_id)
+    service = OrderService(repository, FakeCatalog(), id_factory=next_id, currency=CURRENCY, idempotency_ttl_seconds=IDEMPOTENCY_TTL_SECONDS)
     results = []
 
     def submit():
