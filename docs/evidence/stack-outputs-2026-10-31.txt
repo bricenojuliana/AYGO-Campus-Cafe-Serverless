@@ -1,0 +1,38 @@
+Outputs
+----------------------------------------------------------------------------------------------------
+Key                 ExecutionRoleMode
+Description         Which execution roles the functions use
+Value               shared existing role arn:aws:iam::543227573135:role/LabRole
+
+Key                 ApiAccessLogGroupName
+Description         -
+Value               /campus-cafe/campus-cafe/api-access
+
+Key                 ApiUrl
+Description         Base URL of the HTTP API (put it in frontend/config.js)
+Value               https://lbw14ufund.execute-api.us-east-1.amazonaws.com
+
+Key                 CatalogLogGroupName
+Description         -
+Value               /campus-cafe/campus-cafe/catalog
+
+Key                 CatalogTableName
+Description         -
+Value               campus-cafe-CatalogTable-1DI18OBCGJ1ZP
+
+Key                 OrdersTableName
+Description         -
+Value               campus-cafe-OrdersTable-1FL5QWIFH3WOU
+
+Key                 OrdersLogGroupName
+Description         -
+Value               /campus-cafe/campus-cafe/orders
+
+Key                 CatalogFunctionName
+Description         -
+Value               campus-cafe-CatalogFunction-ErWsKgO8MlsK
+
+Key                 OrdersFunctionName
+Description         -
+Value               campus-cafe-OrdersFunction-5GQnGsq3PXhG
+----------------------------------------------------------------------------------------------------
