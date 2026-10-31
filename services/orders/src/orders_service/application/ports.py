@@ -1,7 +1,7 @@
 """Interfaces the Orders use cases depend on. Adapters implement them; tests may fake them."""
 from typing import Iterable, Mapping, Optional, Protocol
 
-from .domain import CatalogProduct, IdempotencyRecord, Order
+from ..domain.order import CatalogProduct, IdempotencyRecord, Order
 
 
 class IdempotencyKeyTaken(Exception):

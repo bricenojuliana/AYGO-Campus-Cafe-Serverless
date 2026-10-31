@@ -8,13 +8,13 @@ import boto3
 import pytest
 from moto import mock_aws
 
-from catalog_service.domain import Product, product_to_record
-from catalog_service.repository import DynamoProductRepository
+from catalog_service.adapters.dynamodb_repository import DynamoProductRepository
+from catalog_service.domain.product import Product, product_to_record
 from fakes import FakeCatalog
-from orders_service.domain import IdempotencyRecord, OrderLine, build_order
-from orders_service.ports import IdempotencyKeyTaken, OrderIdTaken, VersionConflict
-from orders_service.repository import DynamoOrderRepository
-from orders_service.service import OrderService
+from orders_service.adapters.dynamodb_repository import DynamoOrderRepository
+from orders_service.application.ports import IdempotencyKeyTaken, OrderIdTaken, VersionConflict
+from orders_service.application.service import OrderService
+from orders_service.domain.order import IdempotencyRecord, OrderLine, build_order
 
 NOW = 1_800_000_000
 BODY = {"items": [{"productId": "0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", "quantity": 2}]}

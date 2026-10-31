@@ -7,10 +7,11 @@ import pytest
 
 from events import TEST_CLAIMS, http_api_event
 from fakes import FakeCatalog, InMemoryOrderRepository
-from orders_service.auth import ANONYMOUS, Principal, principal_from_event
-from orders_service.domain import OrderNotFound, Unauthenticated
+from orders_service.api.auth import principal_from_event
+from orders_service.application.service import OrderService
+from orders_service.domain.errors import OrderNotFound, Unauthenticated
+from orders_service.domain.principal import ANONYMOUS, Principal
 from orders_service.handler import handle
-from orders_service.service import OrderService
 
 PRODUCT_ID = "0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b"
 BODY = {"items": [{"productId": PRODUCT_ID, "quantity": 1}]}

@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services" / "catalog" / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from catalog_service.domain import product_from_record, product_to_record  # noqa: E402
+from catalog_service.domain.product import product_from_record, product_to_record  # noqa: E402
 from stack_outputs import DEFAULT_STACK, stack_outputs  # noqa: E402
 
 

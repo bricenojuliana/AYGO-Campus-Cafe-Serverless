@@ -1,9 +1,10 @@
 import pytest
 
 from fakes import PRODUCTS
-from orders_service.domain import (CatalogProduct, CatalogUnavailable, InvalidRequest, MissingIdempotencyKey,
-                                   OrderLine, ProductUnavailable, UnknownProduct, build_order, cancelled,
-                                   parse_create_request, request_fingerprint, validate_idempotency_key)
+from orders_service.domain.errors import (CatalogUnavailable, InvalidRequest, MissingIdempotencyKey,
+                                          ProductUnavailable, UnknownProduct)
+from orders_service.domain.order import CatalogProduct, OrderLine, build_order, cancelled
+from orders_service.domain.requests import parse_create_request, request_fingerprint, validate_idempotency_key
 
 NOW = "2026-10-24T14:00:00Z"
 

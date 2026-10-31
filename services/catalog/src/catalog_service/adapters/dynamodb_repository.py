@@ -4,7 +4,7 @@ from typing import Optional
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from .domain import InvalidProduct, Product, product_from_record
+from ..domain.product import InvalidProduct, Product, product_from_record
 
 logger = logging.getLogger(__name__)
 

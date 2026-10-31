@@ -4,9 +4,9 @@ import time
 import pytest
 
 from fakes import FakeCatalog, InMemoryOrderRepository
-from orders_service.domain import StoreUnavailable
-from orders_service.ids import ORDER_CODE_PATTERN, new_order_id, normalize_order_id
-from orders_service.service import OrderService
+from orders_service.application.service import OrderService
+from orders_service.domain.errors import StoreUnavailable
+from orders_service.domain.ids import ORDER_CODE_PATTERN, new_order_id, normalize_order_id
 
 BODY = {"items": [{"productId": "0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", "quantity": 1}]}
 

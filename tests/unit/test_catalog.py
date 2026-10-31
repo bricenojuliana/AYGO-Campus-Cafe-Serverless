@@ -3,10 +3,10 @@ from decimal import Decimal
 
 import pytest
 
-from catalog_service.domain import (InvalidProduct, InvalidProductId, Product, product_from_record,
-                                    product_to_record, sort_for_menu, validate_product_id)
+from catalog_service.adapters.dynamodb_repository import StoreUnavailable
+from catalog_service.domain.product import (InvalidProduct, InvalidProductId, Product, product_from_record,
+                                            product_to_record, sort_for_menu, validate_product_id)
 from catalog_service.handler import handle
-from catalog_service.repository import StoreUnavailable
 from events import http_api_event
 
 COFFEE = Product("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", "Coffee", 350, True)

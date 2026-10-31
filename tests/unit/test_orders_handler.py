@@ -8,8 +8,8 @@ import pytest
 
 from events import TEST_CLAIMS, http_api_event
 from fakes import FakeCatalog, InMemoryOrderRepository
+from orders_service.application.service import OrderService
 from orders_service.handler import catalog_deadline, handle
-from orders_service.service import OrderService
 
 BODY = {"items": [{"productId": "0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", "quantity": 2}]}
 

@@ -4,28 +4,17 @@ import json
 import logging
 import os
 import time
+from http import HTTPStatus
 
-from .auth import principal_from_event
-from .domain import (CatalogUnavailable, IdempotencyConflict, InvalidRequest, MissingIdempotencyKey,
-                     OrderError, OrderNotFound, ProductUnavailable, StoreUnavailable, Unauthenticated,
-                     UnknownProduct)
-from .http import error_response, json_response, request_id_of
-from .observability import correlation_id, emit_metric, request_log
+from .adapters.catalog_http_client import correlation_id
+from .api.auth import principal_from_event
+from .api.observability import emit_metric, request_log
+from .api.responses import error_response, error_status_of, json_response, request_id_of
+from .domain.errors import InvalidRequest, OrderError
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 
-ERROR_STATUS = {
-    Unauthenticated: 401,
-    InvalidRequest: 400,
-    MissingIdempotencyKey: 400,
-    UnknownProduct: 400,
-    OrderNotFound: 404,
-    IdempotencyConflict: 409,
-    ProductUnavailable: 409,
-    CatalogUnavailable: 503,
-    StoreUnavailable: 503,
-}
 SAFETY_MARGIN_SECONDS = 1.0
 
 _service = None
@@ -34,10 +23,10 @@ _service = None
 def _default_service():
     global _service
     if _service is None:
-        from .catalog_client import HttpCatalogClient
-        from .ids import new_order_id
-        from .repository import DynamoOrderRepository
-        from .service import OrderService
+        from .adapters.catalog_http_client import HttpCatalogClient
+        from .domain.ids import new_order_id
+        from .adapters.dynamodb_repository import DynamoOrderRepository
+        from .application.service import OrderService
 
         catalog = HttpCatalogClient(
             os.environ["CATALOG_BASE_URL"],
@@ -78,7 +67,7 @@ def _json_body(event: dict):
 def handle(event: dict, service, deadline: float) -> dict:
     request_id = request_id_of(event)
     if event.get("version") != "2.0":
-        return error_response(400, "UNSUPPORTED_PAYLOAD", "Expected API Gateway payload format 2.0.", request_id)
+        return error_response(HTTPStatus.BAD_REQUEST, "UNSUPPORTED_PAYLOAD", "Expected API Gateway payload format 2.0.", request_id)
     route_key = event.get("routeKey", "")
     order_id = (event.get("pathParameters") or {}).get("orderId", "")
     headers = event.get("headers") or {}  # HTTP API 2.0 delivers header names in lowercase
@@ -89,25 +78,22 @@ def handle(event: dict, service, deadline: float) -> dict:
             result = service.create_order(headers.get("idempotency-key"), _json_body(event), deadline, caller)
             if result.replayed:
                 emit_metric("IdempotentReplays")
-                return json_response(200, result.body)
+                return json_response(HTTPStatus.OK, result.body)
             emit_metric("OrdersCreated")
-            return json_response(201, result.body, {"location": f"/orders/{result.order_id}"})
+            return json_response(HTTPStatus.CREATED, result.body, {"location": f"/orders/{result.order_id}"})
         if route_key == "GET /orders/{orderId}":
-            return json_response(200, service.get_order(order_id, caller).to_api())
+            return json_response(HTTPStatus.OK, service.get_order(order_id, caller).to_api())
         if route_key == "POST /orders/{orderId}/cancel":
-            return json_response(200, service.cancel_order(order_id, caller).to_api())
+            return json_response(HTTPStatus.OK, service.cancel_order(order_id, caller).to_api())
     except OrderError as exc:
-        status = ERROR_STATUS.get(type(exc), 500)
-        if status == 503:
+        mapped = error_status_of(exc)
+        if mapped.status == HTTPStatus.SERVICE_UNAVAILABLE:
             emit_metric("DependencyFailures")
             logger.warning(json.dumps({"msg": "dependency failure", "code": exc.code, "requestId": request_id,
                                        "orderId": order_id or None}))
-        response = error_response(status, exc.code, exc.message, request_id)
-        if status == 401:
-            response["headers"]["www-authenticate"] = "Bearer"
-        return response
+        return error_response(mapped.status, exc.code, exc.message, request_id, mapped.headers)
 
-    return error_response(404, "ROUTE_NOT_FOUND", "No such route.", request_id)
+    return error_response(HTTPStatus.NOT_FOUND, "ROUTE_NOT_FOUND", "No such route.", request_id)
 
 
 def lambda_handler(event, context):
@@ -118,7 +104,7 @@ def lambda_handler(event, context):
         response = handle(event, _default_service(), catalog_deadline(context))
     except Exception:
         logger.exception(json.dumps({"msg": "unhandled error", "requestId": request_id}))
-        response = error_response(500, "INTERNAL_ERROR", "Unexpected error.", request_id)
+        response = error_response(HTTPStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Unexpected error.", request_id)
     finally:
         correlation_id.reset(token)
     logger.info(json.dumps(request_log(event, context, response, started)))

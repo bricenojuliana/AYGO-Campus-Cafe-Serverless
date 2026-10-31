@@ -1,5 +1,4 @@
-"""Structured request logs, correlation IDs and CloudWatch Embedded Metric Format metrics."""
-import contextvars
+"""Structured request logs and CloudWatch Embedded Metric Format metrics."""
 import json
 import os
 import time
@@ -10,8 +9,6 @@ OPERATIONS = {
     "POST /orders/{orderId}/cancel": "CancelOrder",
 }
 
-# The API Gateway request ID of the request being handled; forwarded to Catalog as x-correlation-id.
-correlation_id = contextvars.ContextVar("correlation_id", default="")
 
 
 def request_log(event: dict, context, response: dict, started: float) -> dict:

@@ -8,11 +8,11 @@ import pytest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from catalog_service.domain import product_from_record
-from orders_service import domain
-from orders_service.domain import CatalogProduct, OrderLine, build_order
-from orders_service.handler import ERROR_STATUS
-from orders_service.ids import new_order_id
+from catalog_service.domain.product import product_from_record
+from orders_service.api.responses import ERROR_STATUS
+from orders_service.domain import requests
+from orders_service.domain.ids import new_order_id
+from orders_service.domain.order import CatalogProduct, OrderLine, build_order, cancelled
 from test_template import CfnLoader
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -64,16 +64,16 @@ def test_created_and_cancelled_orders_match_the_order_schema(spec):
     order = build_order(new_order_id(), [OrderLine(product.product_id, 2)], {product.product_id: product},
                         "2026-10-31T03:18:55Z")
     jsonschema.validate(order.to_api(), schema(spec, "Order"))
-    jsonschema.validate(domain.cancelled(order, "2026-10-31T03:20:00Z").to_api(), schema(spec, "Order"))
+    jsonschema.validate(cancelled(order, "2026-10-31T03:20:00Z").to_api(), schema(spec, "Order"))
 
 
 def test_request_schema_matches_the_domain_validation(spec):
     request = schema(spec, "CreateOrderRequest")
-    assert request["properties"]["items"]["maxItems"] == domain.MAX_DISTINCT_PRODUCTS
+    assert request["properties"]["items"]["maxItems"] == requests.MAX_DISTINCT_PRODUCTS
     line = request["properties"]["items"]["items"]["properties"]
-    assert (line["quantity"]["minimum"], line["quantity"]["maximum"]) == (domain.MIN_QUANTITY, domain.MAX_QUANTITY)
+    assert (line["quantity"]["minimum"], line["quantity"]["maximum"]) == (requests.MIN_QUANTITY, requests.MAX_QUANTITY)
     key = spec["paths"]["/orders"]["post"]["parameters"][0]
-    assert re.compile(key["schema"]["pattern"]).pattern == domain.IDEMPOTENCY_KEY_PATTERN.pattern
+    assert re.compile(key["schema"]["pattern"]).pattern == requests.IDEMPOTENCY_KEY_PATTERN.pattern
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({"items": [{"productId": "382501b6-8968-4ca8-add5-961d414d5bb9", "quantity": 1}],
                              "totalCents": 1}, request)

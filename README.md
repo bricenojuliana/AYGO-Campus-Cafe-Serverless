@@ -19,8 +19,8 @@ https://github.com/user-attachments/assets/9d5d8ba3-3dea-425c-a212-0e6836cb9025
 |---|---|
 | `template.yaml` | API, stage with access logs, 5 routes, 2 functions, 2 tables, log groups, least-privilege IAM, parameters |
 | `samconfig.toml` | stack name and deployment options (no credentials) |
-| `services/catalog/src/catalog_service/` | `handler` (2.0 event) → `domain` (rules) → `repository` (DynamoDB) |
-| `services/orders/src/orders_service/` | `handler` → `service` + `domain` → `repository` (DynamoDB) and `catalog_client` (HTTPS) |
+| `services/catalog/src/catalog_service/` | `handler.py` (2.0 event) → `domain/` (rules), `adapters/` (DynamoDB), `api/` (HTTP responses, logs) |
+| `services/orders/src/orders_service/` | `handler.py` → `application/` (use cases) + `domain/` (rules) → `adapters/` (DynamoDB, Catalog over HTTPS); `api/` (HTTP, auth, logs) |
 | `frontend/` | HTML/CSS/JS; `config.js` holds only the API URL |
 | `seed/products.json` | 10 typical Colombian café products (COP in cents: `priceCents` 200000 = $2.000), 1 unavailable (jugo de lulo) |
 | `scripts/` | seed, frontend configuration, local server, smoke test of the deployed API |

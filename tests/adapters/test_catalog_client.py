@@ -6,9 +6,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from orders_service.catalog_client import HttpCatalogClient
-from orders_service.domain import CatalogProduct, CatalogUnavailable
-from orders_service.observability import correlation_id
+from orders_service.adapters.catalog_http_client import HttpCatalogClient
+from orders_service.adapters.catalog_http_client import correlation_id
+from orders_service.domain.errors import CatalogUnavailable
+from orders_service.domain.order import CatalogProduct
 
 COFFEE = {"productId": "0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", "name": "Coffee", "priceCents": 350, "currency": "COP", "available": True}
 

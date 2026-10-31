@@ -5,21 +5,8 @@ this function and places its claims at requestContext.authorizer.jwt.claims. Tha
 the only source of identity: headers, the body and CORS are never consulted. If the context is missing
 or incomplete the request is rejected (fail closed).
 """
-from dataclasses import dataclass
-from typing import Optional
-
-from .domain import Unauthenticated
-
-
-@dataclass(frozen=True)
-class Principal:
-    """Who is calling. A subject is unique only within its issuer, so the pair identifies the caller."""
-    issuer: Optional[str]
-    subject: Optional[str]
-
-
-# Service-level default kept until ownership becomes mandatory; handlers never produce it.
-ANONYMOUS = Principal(issuer=None, subject=None)
+from ..domain.errors import Unauthenticated
+from ..domain.principal import Principal
 
 
 def principal_from_event(event: dict) -> Principal:

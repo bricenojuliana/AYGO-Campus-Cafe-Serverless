@@ -1,4 +1,5 @@
 """Bounded HTTPS client for Catalog, called through the API Gateway (GET /products/{productId})."""
+import contextvars
 import json
 import logging
 import time
@@ -6,12 +7,17 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from http import HTTPStatus
 from typing import Iterable, Optional
 
-from .domain import CatalogProduct, CatalogUnavailable
-from .observability import correlation_id
+from ..domain.errors import CatalogUnavailable
+from ..domain.order import CatalogProduct
 
 logger = logging.getLogger(__name__)
+
+# The API Gateway request ID of the request being handled; forwarded to Catalog as x-correlation-id.
+# The handler sets it per request; it is read here so Catalog logs can be joined with Orders logs.
+correlation_id = contextvars.ContextVar("correlation_id", default="")
 
 
 class _Retryable(Exception):
@@ -75,9 +81,9 @@ class HttpCatalogClient:
             with self._open(request, timeout=timeout) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            if exc.code == 404:
+            if exc.code == HTTPStatus.NOT_FOUND:
                 return None
-            if exc.code >= 500 or exc.code == 429:
+            if exc.code >= HTTPStatus.INTERNAL_SERVER_ERROR or exc.code == HTTPStatus.TOO_MANY_REQUESTS:
                 raise _Retryable(f"HTTP {exc.code}") from exc
             raise CatalogUnavailable(f"Catalog answered HTTP {exc.code}.") from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:

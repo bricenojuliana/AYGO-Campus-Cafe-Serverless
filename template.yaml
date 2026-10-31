@@ -296,7 +296,7 @@ Resources:
   # ---------- Authentication seam (not enabled in the workshop baseline) ----------
   # Authentication is outside the baseline contract. To add it, define a JWT authorizer and switch
   # the /orders routes to it; Orders already reads requestContext.authorizer.jwt.claims.sub
-  # (orders_service/auth.py) and enforces ownership in OrderService. CORS is not authentication.
+  # (orders_service/api/auth.py) and enforces ownership in OrderService. CORS is not authentication.
   #
   # OrdersJwtAuthorizer:
   #   Type: AWS::ApiGatewayV2::Authorizer

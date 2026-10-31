@@ -1,10 +1,10 @@
 import json
 import time
 
-from catalog_service.handler import request_log as catalog_request_log
+from catalog_service.api.observability import request_log as catalog_request_log
 from events import http_api_event
-from orders_service.http import error_response, json_response
-from orders_service.observability import request_log as orders_request_log
+from orders_service.api.observability import request_log as orders_request_log
+from orders_service.api.responses import error_response, json_response
 
 ORDER_ID = "CC-7K3Q-9XMD"
 
