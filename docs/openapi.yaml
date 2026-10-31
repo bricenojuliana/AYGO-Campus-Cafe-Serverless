@@ -1,0 +1,375 @@
+openapi: 3.0.3
+info:
+  title: Campus Café API
+  version: 1.0.0
+  description: |
+    Public contract of the Campus Café HTTP API (API Gateway HTTP API, Lambda proxy payload format 2.0).
+    `/products` is served by the Catalog service and `/orders` by the Orders service.
+
+    * Money is always an integer number of minor units. The application uses one currency, COP
+      (ISO 4217, 2 minor units), so `priceCents: 200000` is $2.000.
+    * Prices and totals are computed by the server from the current catalog. A request that sends
+      `priceCents`, `totalCents` or any other unknown field is rejected.
+    * There is no authentication in the workshop baseline. `template.yaml` marks where a JWT
+      authorizer is attached; Orders then scopes orders and idempotency keys to the token's `sub`.
+    * CORS allows only the frontend origin, methods GET/POST/OPTIONS and the headers
+      `Content-Type` and `Idempotency-Key`. No response header is exposed to the browser.
+servers:
+  - url: https://{apiId}.execute-api.{region}.amazonaws.com
+    description: The `ApiUrl` output of the `campus-cafe` stack.
+    variables:
+      apiId:
+        default: example
+      region:
+        default: us-east-1
+tags:
+  - name: Catalog
+  - name: Orders
+paths:
+  /products:
+    get:
+      tags: [Catalog]
+      operationId: listProducts
+      summary: List every product on the menu, available or not.
+      responses:
+        "200":
+          description: The whole menu, sorted by name.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Product"
+        "503":
+          $ref: "#/components/responses/StoreUnavailable"
+  /products/{productId}:
+    get:
+      tags: [Catalog]
+      operationId: getProduct
+      summary: Get one product. Orders calls this route through the gateway to price an order.
+      parameters:
+        - $ref: "#/components/parameters/ProductId"
+      responses:
+        "200":
+          description: The product.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        "404":
+          description: Unknown or malformed product ID (`PRODUCT_NOT_FOUND`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: PRODUCT_NOT_FOUND
+                message: This product does not exist.
+                requestId: GFulKg_RoAMEZkw=
+        "503":
+          $ref: "#/components/responses/StoreUnavailable"
+  /orders:
+    post:
+      tags: [Orders]
+      operationId: createOrder
+      summary: Create an order, or replay the result of an earlier submission with the same key.
+      description: |
+        The client generates one `Idempotency-Key` per submission and reuses it on every retry of
+        that submission.
+
+        * First request with a key: the order and the idempotency record are written in one
+          DynamoDB transaction. Response 201 with `Location`.
+        * Same key and same request (same normalized fingerprint): 200 with the stored creation
+          result. Catalog is not called and the order is not repriced.
+        * Same key and a different request: 409 `IDEMPOTENCY_KEY_CONFLICT`.
+        * Concurrent identical requests: exactly one order is stored; the others get the replay.
+        * If Catalog fails or times out, nothing is written: 503 `CATALOG_UNAVAILABLE`.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: "8–128 characters from `A-Z a-z 0-9 _ . : -`. Missing or malformed → 400."
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9_.:-]{8,128}$"
+          example: demo-order-001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderRequest"
+            example:
+              items:
+                - productId: 382501b6-8968-4ca8-add5-961d414d5bb9
+                  quantity: 2
+      responses:
+        "201":
+          description: Order created.
+          headers:
+            Location:
+              description: Path of the new order, `/orders/{orderId}`.
+              schema:
+                type: string
+              example: /orders/CC-7K3Q-9XMD
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+              example:
+                orderId: CC-7K3Q-9XMD
+                status: CREATED
+                items:
+                  - productId: 382501b6-8968-4ca8-add5-961d414d5bb9
+                    name: Café tinto
+                    quantity: 2
+                    unitPriceCents: 200000
+                totalCents: 400000
+                currency: COP
+                createdAt: "2026-10-31T03:18:55Z"
+                updatedAt: "2026-10-31T03:18:55Z"
+        "200":
+          description: Replay. The stored creation result, unchanged, even if the order was cancelled later.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          description: |
+            `INVALID_REQUEST` (malformed body, unknown fields, 0 or more than 10 lines, quantity
+            outside 1–10, duplicate productId, malformed productId), `MISSING_IDEMPOTENCY_KEY`, or
+            `UNKNOWN_PRODUCT`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: INVALID_REQUEST
+                message: "Unknown fields: totalCents."
+                requestId: GFulDibMIAMEa1A=
+        "409":
+          description: "`IDEMPOTENCY_KEY_CONFLICT` or `PRODUCT_UNAVAILABLE`."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: PRODUCT_UNAVAILABLE
+                message: This product cannot be ordered.
+                requestId: GFulDibMIAMEa1A=
+        "503":
+          description: "`CATALOG_UNAVAILABLE` (Catalog failed or exceeded its deadline) or `STORE_UNAVAILABLE`. No order is stored."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: CATALOG_UNAVAILABLE
+                message: Catalog did not answer in time.
+                requestId: GFupagKjoAMESYA=
+  /orders/{orderId}:
+    get:
+      tags: [Orders]
+      operationId: getOrder
+      summary: Get the current state of an order (strongly consistent read).
+      parameters:
+        - $ref: "#/components/parameters/OrderId"
+      responses:
+        "200":
+          description: The order as it is now.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "404":
+          $ref: "#/components/responses/OrderNotFound"
+        "503":
+          $ref: "#/components/responses/StoreUnavailable"
+  /orders/{orderId}/cancel:
+    post:
+      tags: [Orders]
+      operationId: cancelOrder
+      summary: Move an order from CREATED to CANCELLED.
+      description: |
+        Idempotent: cancelling an order that is already CANCELLED returns 200 with the same
+        cancelled order and changes nothing. Cancelling an unknown order never creates one.
+      parameters:
+        - $ref: "#/components/parameters/OrderId"
+      responses:
+        "200":
+          description: The cancelled order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "404":
+          $ref: "#/components/responses/OrderNotFound"
+        "503":
+          $ref: "#/components/responses/StoreUnavailable"
+components:
+  parameters:
+    ProductId:
+      name: productId
+      in: path
+      required: true
+      description: Canonical lowercase UUID. A malformed ID is reported as 404.
+      schema:
+        type: string
+        format: uuid
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      description: |
+        Short order code `CC-XXXX-XXXX` (Crockford base32). Lookups are lenient: lowercase,
+        missing dashes, O for 0 and I/L for 1 are accepted. A malformed code is reported as 404.
+      schema:
+        type: string
+      example: CC-7K3Q-9XMD
+  responses:
+    OrderNotFound:
+      description: No such order (`ORDER_NOT_FOUND`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: ORDER_NOT_FOUND
+            message: This order does not exist.
+            requestId: GFulDibMIAMEa1A=
+    StoreUnavailable:
+      description: The service could not read or write its own table (`STORE_UNAVAILABLE`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Money:
+      type: integer
+      minimum: 0
+      description: Integer amount in minor units of `currency`.
+    Currency:
+      type: string
+      enum: [COP]
+    Product:
+      type: object
+      additionalProperties: false
+      required: [productId, name, priceCents, currency, available]
+      properties:
+        productId:
+          type: string
+          format: uuid
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        name:
+          type: string
+          minLength: 1
+        priceCents:
+          $ref: "#/components/schemas/Money"
+        currency:
+          $ref: "#/components/schemas/Currency"
+        available:
+          type: boolean
+      example:
+        productId: 382501b6-8968-4ca8-add5-961d414d5bb9
+        name: Café tinto
+        priceCents: 200000
+        currency: COP
+        available: true
+    CreateOrderRequest:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 10
+          description: Distinct products; a productId that appears twice is rejected with 400.
+          items:
+            type: object
+            additionalProperties: false
+            required: [productId, quantity]
+            properties:
+              productId:
+                type: string
+                format: uuid
+                pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              quantity:
+                type: integer
+                minimum: 1
+                maximum: 10
+    OrderItem:
+      type: object
+      additionalProperties: false
+      required: [productId, name, quantity, unitPriceCents]
+      description: Snapshot of the product at creation time; later catalog changes do not alter it.
+      properties:
+        productId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 10
+        unitPriceCents:
+          $ref: "#/components/schemas/Money"
+    Order:
+      type: object
+      additionalProperties: false
+      required: [orderId, status, items, totalCents, currency, createdAt, updatedAt]
+      properties:
+        orderId:
+          type: string
+          pattern: "^CC-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$"
+        status:
+          type: string
+          enum: [CREATED, CANCELLED]
+        items:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items:
+            $ref: "#/components/schemas/OrderItem"
+        totalCents:
+          $ref: "#/components/schemas/Money"
+        currency:
+          $ref: "#/components/schemas/Currency"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message, requestId]
+      description: Every error response. Stack traces and internal details are never returned.
+      properties:
+        code:
+          type: string
+          enum:
+            - INVALID_REQUEST
+            - MISSING_IDEMPOTENCY_KEY
+            - UNKNOWN_PRODUCT
+            - PRODUCT_NOT_FOUND
+            - ORDER_NOT_FOUND
+            - ROUTE_NOT_FOUND
+            - IDEMPOTENCY_KEY_CONFLICT
+            - PRODUCT_UNAVAILABLE
+            - CATALOG_UNAVAILABLE
+            - STORE_UNAVAILABLE
+            - UNSUPPORTED_PAYLOAD
+            - INTERNAL_ERROR
+        message:
+          type: string
+        requestId:
+          type: string
+          description: API Gateway request ID; the same value appears in the access log and the service logs.
