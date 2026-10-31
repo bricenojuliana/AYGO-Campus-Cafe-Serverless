@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Optional
 
-from .auth import ANONYMOUS, Caller
+from .auth import ANONYMOUS, Principal
 from .domain import (IdempotencyConflict, IdempotencyRecord, Order, OrderNotFound, StoreUnavailable,
                      build_order, can_access, cancelled, parse_create_request,
                      request_fingerprint, validate_idempotency_key)
@@ -35,7 +35,7 @@ class OrderService:
         self._clock = clock
 
     def create_order(self, idempotency_key: Optional[str], body: Any, deadline: float,
-                     caller: Caller = ANONYMOUS) -> CreateOrderResult:
+                     caller: Principal = ANONYMOUS) -> CreateOrderResult:
         key = validate_idempotency_key(idempotency_key)
         if caller.subject is not None:
             key = f"{caller.subject}|{key}"  # with authentication, keys are scoped per caller
@@ -66,7 +66,7 @@ class OrderService:
             return CreateOrderResult(order.order_id, body_to_store, replayed=False)
         raise StoreUnavailable()
 
-    def get_order(self, order_id: str, caller: Caller = ANONYMOUS) -> Order:
+    def get_order(self, order_id: str, caller: Principal = ANONYMOUS) -> Order:
         canonical = normalize_order_id(order_id)
         order = self._repository.get_order(canonical) if canonical else None
         # A foreign order is reported as absent so its existence is not revealed.
@@ -74,7 +74,7 @@ class OrderService:
             raise OrderNotFound()
         return order
 
-    def cancel_order(self, order_id: str, caller: Caller = ANONYMOUS) -> Order:
+    def cancel_order(self, order_id: str, caller: Principal = ANONYMOUS) -> Order:
         for _ in range(CANCEL_ATTEMPTS):
             current = self.get_order(order_id, caller)  # normalizes the code
             updated = cancelled(current, _iso(self._clock()))

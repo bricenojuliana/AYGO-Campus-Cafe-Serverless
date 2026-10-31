@@ -2,11 +2,17 @@
 import json
 from typing import Optional
 
+# Claims as the HTTP API JWT authorizer passes them after verifying an Auth0 access token.
+TEST_CLAIMS = {"iss": "https://campus-cafe-test.example.com/", "sub": "auth0|student-1",
+               "aud": ["https://campus-cafe-api"], "scope": "orders:create orders:read orders:cancel"}
+
 
 def http_api_event(route_key: str, path: str, *, path_parameters: Optional[dict] = None,
-                   body: Optional[object] = None, headers: Optional[dict] = None) -> dict:
+                   body: Optional[object] = None, headers: Optional[dict] = None,
+                   claims: Optional[dict] = None) -> dict:
+    """`claims` adds the verified authorizer context; omit it for a request with no authorizer."""
     method = route_key.split(" ", 1)[0]
-    return {
+    event = {
         "version": "2.0",
         "routeKey": route_key,
         "rawPath": path,
@@ -27,3 +33,6 @@ def http_api_event(route_key: str, path: str, *, path_parameters: Optional[dict]
         "body": json.dumps(body) if body is not None and not isinstance(body, str) else body,
         "isBase64Encoded": False,
     }
+    if claims is not None:
+        event["requestContext"]["authorizer"] = {"jwt": {"claims": claims, "scopes": None}}
+    return event

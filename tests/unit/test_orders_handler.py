@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from events import http_api_event
+from events import TEST_CLAIMS, http_api_event
 from fakes import FakeCatalog, InMemoryOrderRepository
 from orders_service.handler import catalog_deadline, handle
 from orders_service.service import OrderService
@@ -23,7 +23,7 @@ def service():
 
 def create_event(body=BODY, key="demo-order-001"):
     headers = {"Idempotency-Key": key} if key else {}
-    return http_api_event("POST /orders", "/orders", body=body, headers=headers)
+    return http_api_event("POST /orders", "/orders", body=body, headers=headers, claims=TEST_CLAIMS)
 
 
 def call(event, service):
@@ -57,8 +57,10 @@ def test_base64_body_is_decoded(service):
     (create_event(body="{not json"), 400, "INVALID_REQUEST"),
     (create_event(body={"items": [{"productId": "3e6a9d4b-5f7a-4b12-8d4e-6f8a0b2c4d5e", "quantity": 1}]}), 400, "UNKNOWN_PRODUCT"),
     (create_event(body={"items": [{"productId": "2d5f8c3a-4e6f-4a01-9c3d-5e7f9a1b3c4d", "quantity": 1}]}), 409, "PRODUCT_UNAVAILABLE"),
-    (http_api_event("GET /orders/{orderId}", "/orders/nope", path_parameters={"orderId": "nope"}), 404, "ORDER_NOT_FOUND"),
-    (http_api_event("POST /orders/{orderId}/cancel", "/orders/nope/cancel", path_parameters={"orderId": "nope"}),
+    (http_api_event("GET /orders/{orderId}", "/orders/nope", path_parameters={"orderId": "nope"},
+                    claims=TEST_CLAIMS), 404, "ORDER_NOT_FOUND"),
+    (http_api_event("POST /orders/{orderId}/cancel", "/orders/nope/cancel", path_parameters={"orderId": "nope"},
+                    claims=TEST_CLAIMS),
      404, "ORDER_NOT_FOUND"),
 ])
 def test_application_errors(service, event, status, code):
@@ -84,9 +86,9 @@ def test_get_and_cancel_flow(service):
     _, created = call(create_event(), service)
     order_id = created["orderId"]
     path = {"orderId": order_id}
-    response, body = call(http_api_event("GET /orders/{orderId}", f"/orders/{order_id}", path_parameters=path), service)
+    response, body = call(http_api_event("GET /orders/{orderId}", f"/orders/{order_id}", path_parameters=path, claims=TEST_CLAIMS), service)
     assert response["statusCode"] == 200 and body == created
-    cancel = http_api_event("POST /orders/{orderId}/cancel", f"/orders/{order_id}/cancel", path_parameters=path)
+    cancel = http_api_event("POST /orders/{orderId}/cancel", f"/orders/{order_id}/cancel", path_parameters=path, claims=TEST_CLAIMS)
     first_response, first = call(cancel, service)
     second_response, second = call(cancel, service)
     assert first_response["statusCode"] == second_response["statusCode"] == 200
@@ -94,7 +96,7 @@ def test_get_and_cancel_flow(service):
 
 
 def test_unknown_route_and_v1_payload(service):
-    assert call(http_api_event("DELETE /orders", "/orders"), service)[0]["statusCode"] == 404
+    assert call(http_api_event("DELETE /orders", "/orders", claims=TEST_CLAIMS), service)[0]["statusCode"] == 404
     event = create_event()
     event["version"] = "1.0"
     assert call(event, service)[1]["code"] == "UNSUPPORTED_PAYLOAD"

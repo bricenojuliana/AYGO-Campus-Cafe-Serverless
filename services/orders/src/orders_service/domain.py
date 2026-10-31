@@ -27,6 +27,11 @@ class OrderError(Exception):
         self.message = message or self.message
 
 
+class Unauthenticated(OrderError):
+    code = "UNAUTHENTICATED"
+    message = "Sign in to use orders."
+
+
 class InvalidRequest(OrderError):
     code = "INVALID_REQUEST"
 

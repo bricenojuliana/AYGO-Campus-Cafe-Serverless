@@ -1,42 +1,95 @@
-"""The JWT seam: claims are read from the authorizer context and ownership is enforced in the service."""
+"""Identity comes only from the verified JWT authorizer context; without it, Orders refuses (fail closed)."""
 import itertools
 import json
 import time
 
 import pytest
 
-from events import http_api_event
+from events import TEST_CLAIMS, http_api_event
 from fakes import FakeCatalog, InMemoryOrderRepository
-from orders_service.auth import ANONYMOUS, Caller, caller_from_event
-from orders_service.domain import OrderNotFound
+from orders_service.auth import ANONYMOUS, Principal, principal_from_event
+from orders_service.domain import OrderNotFound, Unauthenticated
 from orders_service.handler import handle
 from orders_service.service import OrderService
 
-BODY = {"items": [{"productId": "0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", "quantity": 1}]}
+PRODUCT_ID = "0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b"
+BODY = {"items": [{"productId": PRODUCT_ID, "quantity": 1}]}
+ISSUER = TEST_CLAIMS["iss"]
 
 
-def with_claims(event, sub):
-    event["requestContext"]["authorizer"] = {"jwt": {"claims": {"sub": sub}, "scopes": None}}
-    return event
+def orders_events(claims=None, headers=None, body=BODY):
+    path = {"orderId": "CC-0000-0001"}
+    return [
+        http_api_event("POST /orders", "/orders", body=body, claims=claims,
+                       headers={"Idempotency-Key": "demo-order-001", **(headers or {})}),
+        http_api_event("GET /orders/{orderId}", "/orders/CC-0000-0001", path_parameters=path,
+                       claims=claims, headers=headers),
+        http_api_event("POST /orders/{orderId}/cancel", "/orders/CC-0000-0001/cancel", path_parameters=path,
+                       claims=claims, headers=headers),
+    ]
 
 
 @pytest.fixture
-def service():
+def repository():
+    return InMemoryOrderRepository()
+
+
+@pytest.fixture
+def catalog():
+    return FakeCatalog()
+
+
+@pytest.fixture
+def service(repository, catalog):
     ids = (f"CC-0000-{n:04d}" for n in itertools.count(1))
-    return OrderService(InMemoryOrderRepository(), FakeCatalog(), id_factory=lambda: next(ids))
+    return OrderService(repository, catalog, id_factory=lambda: next(ids))
 
 
-def test_no_authorizer_means_anonymous():
-    assert caller_from_event(http_api_event("GET /orders/{orderId}", "/orders/x")) == ANONYMOUS
+@pytest.mark.parametrize("claims", [
+    None,                                        # no authorizer context at all
+    {},                                          # authorizer present, no claims
+    {"sub": "auth0|student-1"},                  # issuer missing
+    {"iss": ISSUER},                             # subject missing
+    {"iss": "", "sub": "auth0|student-1"},       # empty values
+    {"iss": ISSUER, "sub": 12345},               # wrong type
+])
+def test_every_orders_route_fails_closed_without_a_verified_principal(service, repository, catalog, claims):
+    for event in orders_events(claims=claims):
+        response = handle(event, service, time.monotonic() + 5)
+        body = json.loads(response["body"])
+        assert response["statusCode"] == 401
+        assert body["code"] == "UNAUTHENTICATED" and set(body) == {"code", "message", "requestId"}
+        assert response["headers"]["www-authenticate"] == "Bearer"
+    assert catalog.calls == 0 and repository.orders == {} and repository.records == {}
 
 
-def test_claims_become_the_caller():
-    event = with_claims(http_api_event("GET /orders/{orderId}", "/orders/x"), "student-1")
-    assert caller_from_event(event) == Caller("student-1")
+def test_identity_claimed_in_headers_or_body_is_ignored(service, repository):
+    spoof_headers = {"x-user": "auth0|admin", "x-customer-id": "auth0|admin", "authorization": "Bearer forged"}
+    spoof_body = {**BODY, "customerId": "auth0|admin"}
+    for event in orders_events(claims=None, headers=spoof_headers, body=spoof_body):
+        assert handle(event, service, time.monotonic() + 5)["statusCode"] == 401
+    assert repository.orders == {} and repository.records == {}
+
+
+def test_ownership_fields_in_create_input_are_rejected(service):
+    for field in ("customerId", "ownerId", "ownerSub"):
+        event = orders_events(claims=TEST_CLAIMS, body={**BODY, field: "auth0|someone-else"})[0]
+        response = handle(event, service, time.monotonic() + 5)
+        assert (response["statusCode"], json.loads(response["body"])["code"]) == (400, "INVALID_REQUEST")
+
+
+def test_verified_claims_become_the_principal():
+    event = http_api_event("GET /orders/{orderId}", "/orders/x", claims=TEST_CLAIMS)
+    assert principal_from_event(event) == Principal(issuer=ISSUER, subject="auth0|student-1")
+
+
+def test_missing_context_raises_instead_of_defaulting_to_anonymous():
+    with pytest.raises(Unauthenticated):
+        principal_from_event(http_api_event("GET /orders/{orderId}", "/orders/x"))
 
 
 def test_owned_orders_are_invisible_and_uncancellable_for_others(service):
-    alice, bob = Caller("alice"), Caller("bob")
+    alice, bob = Principal(ISSUER, "alice"), Principal(ISSUER, "bob")
     order_id = service.create_order("demo-order-001", BODY, time.monotonic() + 5, alice).order_id
     assert service.get_order(order_id, alice).owner_id == "alice"
     for action in (service.get_order, service.cancel_order):
@@ -48,23 +101,20 @@ def test_owned_orders_are_invisible_and_uncancellable_for_others(service):
 
 
 def test_idempotency_keys_are_scoped_per_caller(service):
-    a = service.create_order("demo-order-001", BODY, time.monotonic() + 5, Caller("alice"))
-    b = service.create_order("demo-order-001", BODY, time.monotonic() + 5, Caller("bob"))
+    a = service.create_order("demo-order-001", BODY, time.monotonic() + 5, Principal(ISSUER, "alice"))
+    b = service.create_order("demo-order-001", BODY, time.monotonic() + 5, Principal(ISSUER, "bob"))
     assert a.order_id != b.order_id and not b.replayed
 
 
-def test_anonymous_baseline_orders_stay_shared(service):
-    order_id = service.create_order("demo-order-001", BODY, time.monotonic() + 5).order_id
-    assert service.get_order(order_id, Caller("anyone")).order_id == order_id
-
-
-def test_handler_passes_claims_through(service):
-    create = with_claims(http_api_event("POST /orders", "/orders", body=BODY,
-                                        headers={"Idempotency-Key": "demo-order-001"}), "alice")
+def test_handler_scopes_orders_to_the_token_subject(service):
+    create = http_api_event("POST /orders", "/orders", body=BODY, headers={"Idempotency-Key": "demo-order-002"},
+                            claims={**TEST_CLAIMS, "sub": "alice"})
     order_id = json.loads(handle(create, service, time.monotonic() + 5)["body"])["orderId"]
     path = {"orderId": order_id}
-    as_bob = with_claims(http_api_event("GET /orders/{orderId}", f"/orders/{order_id}", path_parameters=path), "bob")
-    as_alice = with_claims(http_api_event("GET /orders/{orderId}", f"/orders/{order_id}", path_parameters=path), "alice")
+    as_bob = http_api_event("GET /orders/{orderId}", f"/orders/{order_id}", path_parameters=path,
+                            claims={**TEST_CLAIMS, "sub": "bob"})
+    as_alice = http_api_event("GET /orders/{orderId}", f"/orders/{order_id}", path_parameters=path,
+                              claims={**TEST_CLAIMS, "sub": "alice"})
     assert handle(as_bob, service, time.monotonic() + 5)["statusCode"] == 404
     assert handle(as_alice, service, time.monotonic() + 5)["statusCode"] == 200
     assert "ownerId" not in json.loads(handle(as_alice, service, time.monotonic() + 5)["body"])

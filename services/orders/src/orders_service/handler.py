@@ -5,9 +5,10 @@ import logging
 import os
 import time
 
-from .auth import caller_from_event
+from .auth import principal_from_event
 from .domain import (CatalogUnavailable, IdempotencyConflict, InvalidRequest, MissingIdempotencyKey,
-                     OrderError, OrderNotFound, ProductUnavailable, StoreUnavailable, UnknownProduct)
+                     OrderError, OrderNotFound, ProductUnavailable, StoreUnavailable, Unauthenticated,
+                     UnknownProduct)
 from .http import error_response, json_response, request_id_of
 from .observability import correlation_id, emit_metric, request_log
 
@@ -15,6 +16,7 @@ logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 
 ERROR_STATUS = {
+    Unauthenticated: 401,
     InvalidRequest: 400,
     MissingIdempotencyKey: 400,
     UnknownProduct: 400,
@@ -80,9 +82,9 @@ def handle(event: dict, service, deadline: float) -> dict:
     route_key = event.get("routeKey", "")
     order_id = (event.get("pathParameters") or {}).get("orderId", "")
     headers = event.get("headers") or {}  # HTTP API 2.0 delivers header names in lowercase
-    caller = caller_from_event(event)
 
     try:
+        caller = principal_from_event(event)  # before any route work: no verified identity, no access
         if route_key == "POST /orders":
             result = service.create_order(headers.get("idempotency-key"), _json_body(event), deadline, caller)
             if result.replayed:
@@ -100,7 +102,10 @@ def handle(event: dict, service, deadline: float) -> dict:
             emit_metric("DependencyFailures")
             logger.warning(json.dumps({"msg": "dependency failure", "code": exc.code, "requestId": request_id,
                                        "orderId": order_id or None}))
-        return error_response(status, exc.code, exc.message, request_id)
+        response = error_response(status, exc.code, exc.message, request_id)
+        if status == 401:
+            response["headers"]["www-authenticate"] = "Bearer"
+        return response
 
     return error_response(404, "ROUTE_NOT_FOUND", "No such route.", request_id)
 
