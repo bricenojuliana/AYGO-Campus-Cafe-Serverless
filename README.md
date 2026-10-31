@@ -3,6 +3,7 @@
 Ordering application for a campus café: a locally served web interface, **API Gateway HTTP API (payload 2.0)**, two **Python 3.13** Lambdas (Catalog and Orders), one DynamoDB table per service and logs in CloudWatch. All infrastructure is created with **AWS SAM** (`template.yaml`).
 
 ![Campus Café architecture](docs/architecture.png)
+[Screencast from 2026-10-30 22-59-18.webm](https://github.com/user-attachments/assets/9d5d8ba3-3dea-425c-a212-0e6836cb9025)
 
 * API contract: [docs/openapi.yaml](docs/openapi.yaml) (OpenAPI 3.0).
 * Design decisions (service and data boundaries, atomic idempotency, durable state, bounded Catalog call): [docs/DESIGN.md](docs/DESIGN.md).
