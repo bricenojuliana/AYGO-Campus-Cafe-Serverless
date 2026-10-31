@@ -2,6 +2,7 @@
 import itertools
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import boto3
@@ -10,11 +11,12 @@ from moto import mock_aws
 
 from catalog_service.adapters.dynamodb_repository import DynamoProductRepository
 from catalog_service.domain.product import Product, product_to_record
-from fakes import CURRENCY, FakeCatalog, IDEMPOTENCY_TTL_SECONDS
+from fakes import CURRENCY, FakeCatalog, IDEMPOTENCY_TTL_SECONDS, OWNER
 from orders_service.adapters.dynamodb_repository import DynamoOrderRepository
 from orders_service.application.ports import IdempotencyKeyTaken, OrderIdTaken, VersionConflict
 from orders_service.application.service import OrderService
 from orders_service.domain.order import IdempotencyRecord, OrderLine, build_order
+from orders_service.domain.principal import Principal
 
 NOW = 1_800_000_000
 BODY = {"items": [{"productId": "0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", "quantity": 2}]}
@@ -38,7 +40,7 @@ def orders_repo(aws):
 
 
 def sample_order(order_id="CC-0000-0001"):
-    return build_order(order_id, (OrderLine("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", 2),), FakeCatalog().products, "2026-10-24T14:00:00Z", currency=CURRENCY)
+    return build_order(order_id, (OrderLine("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", 2),), FakeCatalog().products, "2026-10-24T14:00:00Z", currency=CURRENCY, owner=OWNER)
 
 
 def record_for(order, key="demo-order-001", fingerprint="fp", expires_at=NOW + 100):
@@ -96,22 +98,46 @@ def test_expired_record_is_ignored_and_can_be_replaced(orders_repo):
 def test_conditional_replace_never_creates_and_detects_conflicts(orders_repo):
     order = sample_order()
     with pytest.raises(VersionConflict):
-        orders_repo.replace_order(order, expected_version=1)
+        orders_repo.replace_order(order, expected_version=1, owner=OWNER)
     assert orders_repo.get_order("CC-0000-0001") is None
     orders_repo.create_order(order, record_for(order), NOW)
     with pytest.raises(VersionConflict):
-        orders_repo.replace_order(order, expected_version=7)
+        orders_repo.replace_order(order, expected_version=7, owner=OWNER)
+
+
+def test_owner_is_stored_and_dynamodb_refuses_a_cancel_by_anyone_else(orders_repo, aws):
+    order = sample_order()
+    orders_repo.create_order(order, record_for(order), NOW)
+    item = aws.get_item(TableName="orders", Key={"pk": {"S": "ORDER#CC-0000-0001"}})["Item"]
+    assert (item["ownerIss"]["S"], item["ownerSub"]["S"]) == (OWNER.issuer, OWNER.subject)
+
+    cancelled_order = replace(order, status="CANCELLED", version=2)
+    for intruder in (Principal(OWNER.issuer, "auth0|someone-else"),     # same issuer, other user
+                     Principal("https://other-tenant.example.com/", OWNER.subject)):  # same sub, other issuer
+        with pytest.raises(VersionConflict):
+            orders_repo.replace_order(cancelled_order, expected_version=1, owner=intruder)
+    assert orders_repo.get_order("CC-0000-0001").status == "CREATED"
+    orders_repo.replace_order(cancelled_order, expected_version=1, owner=OWNER)
+    assert orders_repo.get_order("CC-0000-0001").status == "CANCELLED"
+
+
+def test_legacy_order_without_owner_cannot_be_replaced(orders_repo, aws):
+    legacy = replace(sample_order(), owner_issuer=None, owner_subject=None)
+    orders_repo.create_order(legacy, record_for(legacy), NOW)
+    assert "ownerIss" not in aws.get_item(TableName="orders", Key={"pk": {"S": "ORDER#CC-0000-0001"}})["Item"]
+    with pytest.raises(VersionConflict):
+        orders_repo.replace_order(replace(legacy, status="CANCELLED", version=2), expected_version=1, owner=OWNER)
 
 
 def test_service_end_to_end_on_dynamodb(orders_repo):
     ids = (f"CC-0000-{n:04d}" for n in itertools.count(1))
     service = OrderService(orders_repo, FakeCatalog(), id_factory=lambda: next(ids),
                            clock=lambda: datetime(2026, 10, 24, 14, tzinfo=timezone.utc), currency=CURRENCY, idempotency_ttl_seconds=IDEMPOTENCY_TTL_SECONDS)
-    created = service.create_order("demo-order-001", BODY, time.monotonic() + 5)
-    replay = service.create_order("demo-order-001", BODY, time.monotonic() + 5)
+    created = service.create_order("demo-order-001", BODY, time.monotonic() + 5, OWNER)
+    replay = service.create_order("demo-order-001", BODY, time.monotonic() + 5, OWNER)
     assert replay.replayed and replay.body == created.body
-    assert service.cancel_order(created.order_id).status == "CANCELLED"
-    assert service.cancel_order(created.order_id).status == "CANCELLED"
+    assert service.cancel_order(created.order_id, OWNER).status == "CANCELLED"
+    assert service.cancel_order(created.order_id, OWNER).status == "CANCELLED"
     assert orders_repo.get_order(created.order_id).version == 2
 
 
@@ -162,7 +188,7 @@ def test_racing_identical_submissions_persist_one_order(aws, orders_repo):
     results = []
 
     def submit():
-        results.append(service.create_order("demo-order-001", BODY, time.monotonic() + 5))
+        results.append(service.create_order("demo-order-001", BODY, time.monotonic() + 5, OWNER))
 
     threads = [threading.Thread(target=submit) for _ in range(threads_count)]
     for t in threads:

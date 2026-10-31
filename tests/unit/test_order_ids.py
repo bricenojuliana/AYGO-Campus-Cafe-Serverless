@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from fakes import CURRENCY, FakeCatalog, IDEMPOTENCY_TTL_SECONDS, InMemoryOrderRepository
+from fakes import CURRENCY, FakeCatalog, IDEMPOTENCY_TTL_SECONDS, InMemoryOrderRepository, OWNER
 from orders_service.application.service import OrderService
 from orders_service.domain.errors import StoreUnavailable
 from orders_service.domain.ids import ORDER_CODE_PATTERN, new_order_id, normalize_order_id
@@ -38,17 +38,17 @@ def test_normalization_rejects_everything_else(raw):
 
 def test_lookup_and_cancel_accept_the_typed_form():
     service = OrderService(InMemoryOrderRepository(), FakeCatalog(), id_factory=lambda: "CC-7K3Q-9XM0", currency=CURRENCY, idempotency_ttl_seconds=IDEMPOTENCY_TTL_SECONDS)
-    service.create_order("demo-order-001", BODY, time.monotonic() + 5)
-    assert service.get_order("cc 7k3q 9xmo").order_id == "CC-7K3Q-9XM0"
-    assert service.cancel_order("cc-7k3q-9xm0").status == "CANCELLED"
+    service.create_order("demo-order-001", BODY, time.monotonic() + 5, OWNER)
+    assert service.get_order("cc 7k3q 9xmo", OWNER).order_id == "CC-7K3Q-9XM0"
+    assert service.cancel_order("cc-7k3q-9xm0", OWNER).status == "CANCELLED"
 
 
 def test_code_collision_draws_a_new_code():
     repository = InMemoryOrderRepository()
     codes = iter(["CC-AAAA-AAAA", "CC-AAAA-AAAA", "CC-BBBB-BBBB"])
     service = OrderService(repository, FakeCatalog(), id_factory=lambda: next(codes), currency=CURRENCY, idempotency_ttl_seconds=IDEMPOTENCY_TTL_SECONDS)
-    first = service.create_order("demo-order-001", BODY, time.monotonic() + 5)
-    second = service.create_order("demo-order-002", BODY, time.monotonic() + 5)
+    first = service.create_order("demo-order-001", BODY, time.monotonic() + 5, OWNER)
+    second = service.create_order("demo-order-002", BODY, time.monotonic() + 5, OWNER)
     assert (first.order_id, second.order_id) == ("CC-AAAA-AAAA", "CC-BBBB-BBBB")
     assert len(repository.orders) == 2 and len(repository.records) == 2
 
@@ -56,7 +56,7 @@ def test_code_collision_draws_a_new_code():
 def test_persistent_collisions_fail_without_writing():
     repository = InMemoryOrderRepository()
     service = OrderService(repository, FakeCatalog(), id_factory=lambda: "CC-AAAA-AAAA", currency=CURRENCY, idempotency_ttl_seconds=IDEMPOTENCY_TTL_SECONDS)
-    service.create_order("demo-order-001", BODY, time.monotonic() + 5)
+    service.create_order("demo-order-001", BODY, time.monotonic() + 5, OWNER)
     with pytest.raises(StoreUnavailable):
-        service.create_order("demo-order-002", BODY, time.monotonic() + 5)
+        service.create_order("demo-order-002", BODY, time.monotonic() + 5, OWNER)
     assert len(repository.orders) == 1 and len(repository.records) == 1

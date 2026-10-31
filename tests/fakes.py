@@ -6,10 +6,15 @@ import time
 from orders_service.application.ports import IdempotencyKeyTaken, OrderIdTaken, VersionConflict
 from orders_service.domain.errors import CatalogUnavailable
 from orders_service.domain.order import CatalogProduct
+from orders_service.domain.principal import Principal
 
 # Deployment settings as template.yaml passes them to the functions (Currency, IdempotencyTtlHours).
 CURRENCY = "COP"
 IDEMPOTENCY_TTL_SECONDS = 24 * 3600
+
+# The verified caller most tests act as (same identity as events.TEST_CLAIMS).
+OWNER = Principal(issuer="https://campus-cafe-test.example.com/", subject="auth0|student-1",
+                  scopes=frozenset({"orders:create", "orders:read", "orders:cancel"}))
 
 PRODUCTS = {
     "0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b": CatalogProduct("0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b", "Coffee", 350, "COP", True),
@@ -57,9 +62,11 @@ class InMemoryOrderRepository:
     def get_order(self, order_id):
         return self.orders.get(order_id)
 
-    def replace_order(self, order, expected_version):
+    def replace_order(self, order, expected_version, owner):
         with self.lock:
             current = self.orders.get(order.order_id)
-            if current is None or current.version != expected_version:
+            # Same condition as DynamoDB: exists, same version, and stored owner == owner.
+            if (current is None or current.version != expected_version
+                    or (current.owner_issuer, current.owner_subject) != (owner.issuer, owner.subject)):
                 raise VersionConflict(order.order_id)
             self.orders[order.order_id] = order

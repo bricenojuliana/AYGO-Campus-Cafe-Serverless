@@ -9,6 +9,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from ..application.ports import IdempotencyKeyTaken, OrderIdTaken, VersionConflict
 from ..domain.errors import StoreUnavailable
 from ..domain.order import IdempotencyRecord, Order, OrderItem
+from ..domain.principal import Principal
 
 ORDER_PREFIX = "ORDER#"
 IDEMPOTENCY_PREFIX = "IDEMPOTENCY#"
@@ -38,7 +39,9 @@ def order_to_item(order: Order) -> dict:
         "createdAt": order.created_at,
         "updatedAt": order.updated_at,
         "version": order.version,
-        **({"ownerId": order.owner_id} if order.owner_id else {}),
+        # Owner of the order (verified token iss + sub). Read back only for ownership checks.
+        **({"ownerIss": order.owner_issuer, "ownerSub": order.owner_subject}
+           if order.owner_issuer and order.owner_subject else {}),
     }
 
 
@@ -53,7 +56,8 @@ def order_from_item(item: dict) -> Order:
         created_at=item["createdAt"],
         updated_at=item["updatedAt"],
         version=int(item["version"]),
-        owner_id=item.get("ownerId"),
+        owner_issuer=item.get("ownerIss"),  # absent on legacy orders: nobody can access them
+        owner_subject=item.get("ownerSub"),
     )
 
 
@@ -110,14 +114,18 @@ class DynamoOrderRepository:
         item = self._get(ORDER_PREFIX + order_id)
         return order_from_item(item) if item else None
 
-    def replace_order(self, order: Order, expected_version: int) -> None:
+    def replace_order(self, order: Order, expected_version: int, owner: Principal) -> None:
         try:
             self._client.put_item(
                 TableName=self._table,
                 Item=_to_ddb(order_to_item(order)),
-                # attribute_exists keeps a cancellation from ever creating an order.
-                ConditionExpression="attribute_exists(pk) AND version = :expected",
-                ExpressionAttributeValues={":expected": {"N": str(expected_version)}},
+                # attribute_exists keeps a cancellation from ever creating an order; the owner condition
+                # makes DynamoDB itself refuse a write by anyone but the stored owner.
+                ConditionExpression=("attribute_exists(pk) AND version = :expected"
+                                     " AND ownerIss = :owner_iss AND ownerSub = :owner_sub"),
+                ExpressionAttributeValues={":expected": {"N": str(expected_version)},
+                                           ":owner_iss": {"S": owner.issuer},
+                                           ":owner_sub": {"S": owner.subject}},
             )
         except ClientError as exc:
             if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":

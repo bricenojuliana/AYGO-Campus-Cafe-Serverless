@@ -1,4 +1,5 @@
-"""Identity comes only from the verified JWT authorizer context; without it, Orders refuses (fail closed)."""
+"""Identity comes only from the verified JWT authorizer context; without it, Orders refuses (fail closed).
+Ownership of orders is tested in test_ownership.py."""
 import itertools
 import json
 import time
@@ -9,8 +10,8 @@ from events import TEST_CLAIMS, http_api_event
 from fakes import CURRENCY, FakeCatalog, IDEMPOTENCY_TTL_SECONDS, InMemoryOrderRepository
 from orders_service.api.auth import principal_from_event
 from orders_service.application.service import OrderService
-from orders_service.domain.errors import OrderNotFound, Unauthenticated
-from orders_service.domain.principal import ANONYMOUS, Principal
+from orders_service.domain.errors import Unauthenticated
+from orders_service.domain.principal import Principal
 from orders_service.handler import handle
 
 PRODUCT_ID = "0b3f6a1e-2c4d-4e8f-9a1b-3c5d7e9f1a2b"
@@ -88,35 +89,3 @@ def test_verified_claims_become_the_principal():
 def test_missing_context_raises_instead_of_defaulting_to_anonymous():
     with pytest.raises(Unauthenticated):
         principal_from_event(http_api_event("GET /orders/{orderId}", "/orders/x"))
-
-
-def test_owned_orders_are_invisible_and_uncancellable_for_others(service):
-    alice, bob = Principal(ISSUER, "alice"), Principal(ISSUER, "bob")
-    order_id = service.create_order("demo-order-001", BODY, time.monotonic() + 5, alice).order_id
-    assert service.get_order(order_id, alice).owner_id == "alice"
-    for action in (service.get_order, service.cancel_order):
-        with pytest.raises(OrderNotFound):
-            action(order_id, bob)
-        with pytest.raises(OrderNotFound):
-            action(order_id, ANONYMOUS)
-    assert service.get_order(order_id, alice).status == "CREATED"
-
-
-def test_idempotency_keys_are_scoped_per_caller(service):
-    a = service.create_order("demo-order-001", BODY, time.monotonic() + 5, Principal(ISSUER, "alice"))
-    b = service.create_order("demo-order-001", BODY, time.monotonic() + 5, Principal(ISSUER, "bob"))
-    assert a.order_id != b.order_id and not b.replayed
-
-
-def test_handler_scopes_orders_to_the_token_subject(service):
-    create = http_api_event("POST /orders", "/orders", body=BODY, headers={"Idempotency-Key": "demo-order-002"},
-                            claims={**TEST_CLAIMS, "sub": "alice"})
-    order_id = json.loads(handle(create, service, time.monotonic() + 5)["body"])["orderId"]
-    path = {"orderId": order_id}
-    as_bob = http_api_event("GET /orders/{orderId}", f"/orders/{order_id}", path_parameters=path,
-                            claims={**TEST_CLAIMS, "sub": "bob"})
-    as_alice = http_api_event("GET /orders/{orderId}", f"/orders/{order_id}", path_parameters=path,
-                              claims={**TEST_CLAIMS, "sub": "alice"})
-    assert handle(as_bob, service, time.monotonic() + 5)["statusCode"] == 404
-    assert handle(as_alice, service, time.monotonic() + 5)["statusCode"] == 200
-    assert "ownerId" not in json.loads(handle(as_alice, service, time.monotonic() + 5)["body"])

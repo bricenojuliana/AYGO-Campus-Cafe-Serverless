@@ -6,7 +6,7 @@ from typing import Any, Callable, Mapping, Optional
 from ..domain.errors import IdempotencyConflict, OrderNotFound, StoreUnavailable
 from ..domain.ids import normalize_order_id
 from ..domain.order import IdempotencyRecord, Order, build_order, can_access, cancelled
-from ..domain.principal import ANONYMOUS, Principal
+from ..domain.principal import Principal
 from ..domain.requests import parse_create_request, request_fingerprint, validate_idempotency_key
 from .ports import CatalogClient, IdempotencyKeyTaken, OrderIdTaken, OrderRepository, VersionConflict
 
@@ -37,10 +37,9 @@ class OrderService:
         self._clock = clock
 
     def create_order(self, idempotency_key: Optional[str], body: Any, deadline: float,
-                     caller: Principal = ANONYMOUS) -> CreateOrderResult:
+                     caller: Principal) -> CreateOrderResult:
         key = validate_idempotency_key(idempotency_key)
-        if caller.subject is not None:
-            key = f"{caller.subject}|{key}"  # with authentication, keys are scoped per caller
+        key = f"{caller.subject}|{key}"  # keys are scoped per caller (made collision-proof in the next step)
         lines = parse_create_request(body)
         fingerprint = request_fingerprint(lines)
         now = self._clock()
@@ -52,7 +51,7 @@ class OrderService:
         products = self._catalog.get_products([line.product_id for line in lines], deadline)
         for _ in range(ORDER_ID_ATTEMPTS):
             order = build_order(self._new_id(), lines, products, _iso(now), currency=self._currency,
-                                owner_id=caller.subject)
+                                owner=caller)
             body_to_store = order.to_api()
             record = IdempotencyRecord(key, fingerprint, order.order_id, body_to_store,
                                        int(now.timestamp()) + self._idempotency_ttl)
@@ -69,22 +68,24 @@ class OrderService:
             return CreateOrderResult(order.order_id, body_to_store, replayed=False)
         raise StoreUnavailable()
 
-    def get_order(self, order_id: str, caller: Principal = ANONYMOUS) -> Order:
+    def get_order(self, order_id: str, caller: Principal) -> Order:
         canonical = normalize_order_id(order_id)
         order = self._repository.get_order(canonical) if canonical else None
-        # A foreign order is reported as absent so its existence is not revealed.
-        if order is None or not can_access(caller.subject, order):
+        # Missing, foreign and legacy ownerless orders all raise the same error, so a caller cannot
+        # tell whether an order code exists.
+        if order is None or not can_access(caller, order):
             raise OrderNotFound()
         return order
 
-    def cancel_order(self, order_id: str, caller: Principal = ANONYMOUS) -> Order:
+    def cancel_order(self, order_id: str, caller: Principal) -> Order:
         for _ in range(CANCEL_ATTEMPTS):
             current = self.get_order(order_id, caller)  # normalizes the code
             updated = cancelled(current, _iso(self._clock()))
             if updated is current:
                 return current
             try:
-                self._repository.replace_order(updated, expected_version=current.version)
+                # The write is conditional on the stored owner too, not only on the check above.
+                self._repository.replace_order(updated, expected_version=current.version, owner=caller)
                 return updated
             except VersionConflict:
                 continue

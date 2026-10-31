@@ -2,6 +2,7 @@
 from typing import Iterable, Mapping, Optional, Protocol
 
 from ..domain.order import CatalogProduct, IdempotencyRecord, Order
+from ..domain.principal import Principal
 
 
 class IdempotencyKeyTaken(Exception):
@@ -13,7 +14,7 @@ class OrderIdTaken(Exception):
 
 
 class VersionConflict(Exception):
-    """The order changed between read and conditional write."""
+    """The conditional write failed: the order changed since it was read, or it is not the owner's."""
 
 
 class CatalogClient(Protocol):
@@ -36,5 +37,6 @@ class OrderRepository(Protocol):
     def get_order(self, order_id: str) -> Optional[Order]:
         ...
 
-    def replace_order(self, order: Order, expected_version: int) -> None:
-        """Stores `order` only if the stored version equals `expected_version`, else VersionConflict."""
+    def replace_order(self, order: Order, expected_version: int, owner: Principal) -> None:
+        """Stores `order` only if the stored order exists, still has `expected_version` and belongs to
+        `owner` (issuer and subject); otherwise raises VersionConflict. Never creates an order."""

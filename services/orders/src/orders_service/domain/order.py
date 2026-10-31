@@ -3,6 +3,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Mapping, Optional
 
 from .errors import CatalogUnavailable, InvalidRequest, ProductUnavailable, UnknownProduct
+from .principal import Principal
 
 STATUS_CREATED = "CREATED"
 STATUS_CANCELLED = "CANCELLED"
@@ -48,7 +49,10 @@ class Order:
     created_at: str
     updated_at: str
     version: int = 1
-    owner_id: Optional[str] = None  # JWT subject of the creator; None in the anonymous workshop baseline
+    # Who created the order: the verified (iss, sub) of the token. Stored by the server, never taken from
+    # the request and never returned by the API. None only for legacy orders created before authentication.
+    owner_issuer: Optional[str] = None
+    owner_subject: Optional[str] = None
 
     def to_api(self) -> dict:
         return {
@@ -71,10 +75,9 @@ class IdempotencyRecord:
     expires_at: int
 
 
-
 def build_order(order_id: str, lines: tuple[OrderLine, ...],
                 products: Mapping[str, Optional[CatalogProduct]], now_iso: str, *,
-                currency: str, owner_id: Optional[str] = None) -> Order:
+                currency: str, owner: Principal) -> Order:
     """Prices the order from Catalog data only; client input never carries prices.
 
     `currency` is the application's single currency (deployment setting); Catalog prices in any
@@ -90,13 +93,17 @@ def build_order(order_id: str, lines: tuple[OrderLine, ...],
             raise CatalogUnavailable("Catalog returned a price this application cannot accept.")
         items.append(OrderItem(product.product_id, product.name, line.quantity, product.price_cents))
     total = sum(item.unit_price_cents * item.quantity for item in items)
-    return Order(order_id, STATUS_CREATED, tuple(items), total, currency, now_iso, now_iso, owner_id=owner_id)
+    return Order(order_id, STATUS_CREATED, tuple(items), total, currency, now_iso, now_iso,
+                 owner_issuer=owner.issuer, owner_subject=owner.subject)
 
 
-def can_access(caller_subject: Optional[str], order: Order) -> bool:
-    """Ownership rule. Orders created without an authenticated caller (the workshop baseline) are
-    shared demo orders; an order with an owner is visible only to that owner."""
-    return order.owner_id is None or order.owner_id == caller_subject
+def can_access(caller: Principal, order: Order) -> bool:
+    """Ownership rule: only the principal that created the order may read or cancel it.
+
+    Both parts must match: a subject is unique only within its issuer. Legacy orders without an owner
+    are accessible to nobody (they are not deleted)."""
+    return (order.owner_issuer is not None and order.owner_subject is not None
+            and order.owner_issuer == caller.issuer and order.owner_subject == caller.subject)
 
 
 def cancelled(order: Order, now_iso: str) -> Order:

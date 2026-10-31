@@ -142,7 +142,9 @@ Orders needs the API's URL in its environment. With SAM `HttpApi` events, the ge
 * Authentication is outside the baseline. Every route declares `AuthorizationType: NONE`, and `template.yaml` contains the commented JWT authorizer to attach to `/orders`.
   * `orders_service/api/auth.py` reads `iss` and `sub` from `requestContext.authorizer.jwt.claims` into a `Principal`. Without them Orders answers 401 (fail closed).
   * Each Orders route needs exactly one scope from the token's `scope` claim (`orders:create`, `orders:read`, `orders:cancel`; `api/auth.py` `ROUTE_SCOPES`). Without it Orders answers 403 `INSUFFICIENT_SCOPE` before doing any work. The gateway authorizer checks the same scopes; this second check keeps a misconfigured route from granting more.
-  * Orders stores an optional `ownerId`, and the service hides orders owned by someone else (reported as 404).
+  * Every order stores its owner as `ownerIss` + `ownerSub`, taken from the verified token at creation; the request can never set it (unknown fields are rejected) and the API never returns it.
+  * Only the owner can read or cancel an order. A missing order, someone else's order and a legacy order without an owner all get the same 404 `ORDER_NOT_FOUND`, so order codes cannot be probed.
+  * The cancel write is conditional on the stored owner as well (`ownerIss = :iss AND ownerSub = :sub`), so DynamoDB itself refuses a write by anyone else, even if the service check were bypassed.
   * With authentication, idempotency keys are scoped per caller.
   * CORS is not used as access control.
 
