@@ -3,9 +3,15 @@
 It exists to exercise the browser UI and the real adapters without AWS credentials. It is never
 deployed and is not part of the application; the deployed stack uses API Gateway, Lambda and DynamoDB.
 
+The Orders routes go through an EMULATED JWT authorizer: it reads the Auth0 access token's claims and
+applies the gateway's checks (issuer, audience, expiry, route scope) but does NOT verify the signature.
+That is acceptable only here, on a local test harness; in AWS the real authorizer verifies it.
+Auth0 settings come from frontend/config.js (or config.example.js).
+
 Usage: python tests/e2e/local_gateway.py [--api-port 3001] [--ui-port 8080] [--catalog-delay 0]
 """
 import argparse
+import base64
 import json
 import os
 import re
@@ -33,6 +39,35 @@ ROUTES = [
     ("GET", re.compile(r"^/orders/(?P<orderId>[^/]+)$"), "GET /orders/{orderId}", "orders"),
     ("POST", re.compile(r"^/orders/(?P<orderId>[^/]+)/cancel$"), "POST /orders/{orderId}/cancel", "orders"),
 ]
+
+
+def frontend_config() -> dict:
+    """The public values of frontend/config.js (falls back to config.example.js)."""
+    for name in ("config.js", "config.example.js"):
+        path = ROOT / "frontend" / name
+        if path.exists():
+            return dict(re.findall(r'(\w+)\s*:\s*"([^"]*)"', path.read_text()))
+    return {}
+
+
+def emulated_authorizer(headers: dict, route_key: str, config: dict, route_scopes: dict):
+    """TEST ONLY. Returns (status, claims): 401/403 like API Gateway, or 200 with the token's claims.
+    The signature is NOT verified."""
+    auth = headers.get("authorization", "")
+    if not auth.startswith("Bearer ") or not config.get("auth0Domain") or not config.get("auth0Audience"):
+        return 401, None
+    try:
+        payload = auth[len("Bearer "):].split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except (IndexError, ValueError):
+        return 401, None
+    audiences = claims.get("aud") if isinstance(claims.get("aud"), list) else [claims.get("aud")]
+    if (claims.get("iss") != f"https://{config['auth0Domain']}/" or config["auth0Audience"] not in audiences
+            or not isinstance(claims.get("exp"), (int, float)) or claims["exp"] <= time.time()):
+        return 401, None
+    if route_scopes[route_key] not in str(claims.get("scope", "")).split():
+        return 403, None
+    return 200, claims
 
 
 def main():
@@ -63,7 +98,10 @@ def main():
                        "CURRENCY": "COP", "IDEMPOTENCY_TTL_HOURS": "24"})
     from catalog_service import handler as catalog_handler
     from orders_service import handler as orders_handler
+    from orders_service.api.auth import ROUTE_SCOPES
     handlers = {"catalog": catalog_handler.lambda_handler, "orders": orders_handler.lambda_handler}
+    config = frontend_config()
+    print("WARNING: test harness. Orders tokens are checked WITHOUT signature verification.", file=sys.stderr)
 
     class Context:
         def __init__(self):
@@ -82,7 +120,7 @@ def main():
             if self.headers.get("Origin") == origin:
                 self._cors()
                 self.send_header("access-control-allow-methods", "GET,POST,OPTIONS")
-                self.send_header("access-control-allow-headers", "content-type,idempotency-key")
+                self.send_header("access-control-allow-headers", "content-type,idempotency-key,authorization")
             self.end_headers()
 
         def do_GET(self):
@@ -103,13 +141,20 @@ def main():
                 time.sleep(args.catalog_delay)
             length = int(self.headers.get("content-length") or 0)
             body = self.rfile.read(length).decode() if length else None
+            headers = {k.lower(): v for k, v in self.headers.items()}
             event = {
                 "version": "2.0", "routeKey": route_key, "rawPath": path, "rawQueryString": "",
-                "headers": {k.lower(): v for k, v in self.headers.items()},
+                "headers": headers,
                 "requestContext": {"requestId": str(uuid.uuid4()), "routeKey": route_key, "stage": "$default",
                                    "http": {"method": method, "path": path}},
                 "pathParameters": match.groupdict() or None, "body": body, "isBase64Encoded": False,
             }
+            if target == "orders":
+                status, claims = emulated_authorizer(headers, route_key, config, ROUTE_SCOPES)
+                if status != 200:
+                    message = b'{"message":"Unauthorized"}' if status == 401 else b'{"message":"Forbidden"}'
+                    return self._send(status, {"content-type": "application/json"}, message)
+                event["requestContext"]["authorizer"] = {"jwt": {"claims": claims, "scopes": None}}
             result = handlers[target](event, Context())
             self._send(result["statusCode"], result.get("headers", {}), result.get("body", "").encode())
 
@@ -132,7 +177,8 @@ def main():
         def do_GET(self):
             path = urlsplit(self.path).path
             if path == "/config.js":
-                payload = f'window.CAMPUS_CAFE_CONFIG = {{ apiBaseUrl: "http://127.0.0.1:{args.api_port}" }};'.encode()
+                local = {**config, "apiBaseUrl": f"http://127.0.0.1:{args.api_port}"}
+                payload = f"window.CAMPUS_CAFE_CONFIG = {json.dumps(local)};".encode()
                 ctype = "text/javascript"
             else:
                 file = (ROOT / "frontend" / (path.lstrip("/") or "index.html")).resolve()

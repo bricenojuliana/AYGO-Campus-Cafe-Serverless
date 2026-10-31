@@ -84,6 +84,21 @@ def find_log(logs, group, needle, since_ms, attempts=12):
     return []
 
 
+# What the browser may receive: the API URL and the public Auth0 SPA settings. Never a client secret,
+# AWS keys or any other credential.
+FRONTEND_CONFIG_KEYS = {"apiBaseUrl", "auth0Domain", "auth0ClientId", "auth0Audience"}
+
+
+def inspect_frontend_config(config_js: str) -> tuple[bool, set]:
+    """Returns (only allowed public keys and no secrets, keys found) for a frontend/config.js text."""
+    without_strings = re.sub(r"\"[^\"]*\"|'[^']*'", '""', config_js)
+    code = re.sub(r"//[^\n]*", "", without_strings)  # comments removed after strings, so "https://" is safe
+    keys = set(re.findall(r"(\w+)\s*:", code))
+    has_secret = (re.search(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b", config_js)
+                  or re.search(r"(?i)(secret|password|token)\w*", code))
+    return (not has_secret and keys <= FRONTEND_CONFIG_KEYS and "apiBaseUrl" in keys), keys
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--stack", default=DEFAULT_STACK)
@@ -204,13 +219,9 @@ def main():
     config_path = next(p for p in (ROOT / "frontend" / "config.js", ROOT / "frontend" / "config.example.js")
                        if p.exists())
     r.line(f"- Inspected `frontend/{config_path.name}`")
-    config_js = config_path.read_text()
-    code = "\n".join(line for line in config_js.splitlines() if not line.strip().startswith("//"))
-    has_key = re.search(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b", code) or re.search(r"(?i)secret\w*\s*[:=]", code)
-    without_strings = re.sub(r"\"[^\"]*\"|'[^']*'", '""', code)
-    config_keys = set(re.findall(r"(\w+)\s*:", without_strings))
-    r.check("frontend config contains only the API URL (no AWS keys)",
-            not has_key and config_keys == {"apiBaseUrl"}, f"keys: {sorted(config_keys)}")
+    ok, config_keys = inspect_frontend_config(config_path.read_text())
+    r.check("frontend config holds only public values: API URL and Auth0 SPA settings (no secrets)",
+            ok, f"keys: {sorted(config_keys)}")
     r.line(f"- Execution role mode (stack output): {out.get('ExecutionRoleMode', 'unknown')}")
     for fn in (catalog_fn, orders_fn):
         role = lam.get_function_configuration(FunctionName=fn)["Role"].split("/")[-1]

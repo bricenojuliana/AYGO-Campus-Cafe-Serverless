@@ -1,12 +1,17 @@
 "use strict";
 
-const API = ((window.CAMPUS_CAFE_CONFIG || {}).apiBaseUrl || "").replace(/\/+$/, "");
+const CONFIG = window.CAMPUS_CAFE_CONFIG || {};
+const API = (CONFIG.apiBaseUrl || "").replace(/\/+$/, "");
 const MAX_LINES = 10;
 const MAX_QTY = 10;
+// The scopes the Orders API requires, one per route. The access token carries them.
+const ORDERS_SCOPES = "orders:create orders:read orders:cancel";
+// Requested at login: the OpenID scopes give the profile shown in the header (name, email); the
+// Orders scopes go into the access token for the API.
+const LOGIN_SCOPES = `openid profile email ${ORDERS_SCOPES}`;
 const STORAGE = {
-  cart: "campusCafe.cart",
-  pending: "campusCafe.pendingSubmission",
-  orders: "campusCafe.knownOrders",
+  cart: "campusCafe.cart",              // the cart is not personal: it survives logging in and out
+  legacy: ["campusCafe.knownOrders", "campusCafe.pendingSubmission"],  // pre-login keys, no longer used
 };
 
 const state = {
@@ -16,6 +21,8 @@ const state = {
   knownOrders: [],                // order IDs, newest first
   searchedOrder: null,            // while a search is active only this order is shown ("" = no match)
   submitting: false,
+  user: null,                     // profile of the signed-in user (display only), or null
+  session: null,                  // { scopes, expiresAt } granted to the access token (display only)
 };
 
 const $ = (id) => document.getElementById(id);
@@ -37,6 +44,151 @@ function save(key, value) {
   } catch { /* storage unavailable: state stays in memory */ }
 }
 
+// Remembered order codes and unconfirmed submissions belong to one user: Bob never sees Alice's list.
+// This only organizes the UI; the API is what enforces that nobody can read someone else's orders.
+function userKey(name) {
+  return `campusCafe.user.${state.user.sub}.${name}`;
+}
+
+// ---------- authentication (Auth0 SPA SDK: Authorization Code Flow with PKCE) ----------
+let auth0Client = null;
+
+function authConfigured() {
+  return Boolean(CONFIG.auth0Domain && CONFIG.auth0ClientId && CONFIG.auth0Audience && window.auth0);
+}
+
+async function initAuth() {
+  if (!authConfigured()) return;
+  // No client secret: a browser cannot keep one. PKCE protects the authorization code instead.
+  // Tokens stay in memory (the SDK default), never in localStorage where any script could read them.
+  auth0Client = await auth0.createAuth0Client({
+    domain: CONFIG.auth0Domain,
+    clientId: CONFIG.auth0ClientId,
+    authorizationParams: {
+      redirect_uri: window.location.origin,
+      audience: CONFIG.auth0Audience,   // the access token is for the Campus Café API, not an ID token
+      scope: LOGIN_SCOPES,
+    },
+  });
+  const params = new URLSearchParams(window.location.search);
+  if (params.has("code") && params.has("state")) {
+    try {
+      await auth0Client.handleRedirectCallback();
+    } catch (error) {
+      setMessage($("orders-message"), `Login failed: ${error.message}`, "error");
+    }
+    window.history.replaceState({}, document.title, window.location.pathname);  // drop code/state from the URL
+  }
+  if (await auth0Client.isAuthenticated()) {
+    // Profile claims from the ID token, used only to show who is signed in. Never sent to the API.
+    state.user = await auth0Client.getUser();
+    state.session = await sessionDetails();
+  }
+}
+
+// What Auth0 granted, as reported next to the token (the access token itself stays opaque to the UI).
+async function sessionDetails() {
+  try {
+    const response = await auth0Client.getTokenSilently({
+      authorizationParams: { audience: CONFIG.auth0Audience, scope: LOGIN_SCOPES },
+      detailedResponse: true,
+    });
+    return {
+      scopes: new Set((response.scope || "").split(" ").filter(Boolean)),
+      expiresAt: Date.now() + (response.expires_in || 0) * 1000,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function accessToken() {
+  try {
+    return await auth0Client.getTokenSilently({
+      authorizationParams: { audience: CONFIG.auth0Audience, scope: LOGIN_SCOPES },
+    });
+  } catch {
+    throw new ApiError(401, { code: "UNAUTHENTICATED", message: "Your session has expired. Please log in again." });
+  }
+}
+
+let bannerTimer = null;
+
+function showBanner() {
+  $("banner").hidden = false;
+  clearTimeout(bannerTimer);
+  bannerTimer = setTimeout(hideBanner, 6000);
+}
+
+function hideBanner() {
+  clearTimeout(bannerTimer);
+  $("banner").hidden = true;
+}
+
+function displayName(user) {
+  return user.nickname || user.name || (user.email || "user").split("@")[0];
+}
+
+function renderAvatar(el, user) {
+  const initials = displayName(user).replace(/[^\p{L}\p{N}]/gu, "").slice(0, 2).toUpperCase() || "?";
+  el.replaceChildren(initials);
+  if (user.picture) {
+    const img = Object.assign(document.createElement("img"), { src: user.picture, alt: "" });
+    img.addEventListener("error", () => img.remove());  // keep the initials if the picture cannot load
+    el.append(img);
+  }
+}
+
+function describeExpiry(expiresAt) {
+  const minutes = Math.round((expiresAt - Date.now()) / 60000);
+  if (minutes <= 0) return "expired: log in again";
+  return minutes >= 60 ? `expires in ${Math.floor(minutes / 60)} h ${minutes % 60} min` : `expires in ${minutes} min`;
+}
+
+function renderUserCard() {
+  const user = state.user;
+  renderAvatar($("user-card-avatar"), user);
+  $("user-card-name").textContent = displayName(user);
+  $("user-card-email").textContent = user.email
+    ? `${user.email}${user.email_verified ? " · verified" : " · not verified"}` : "";
+  const id = $("user-card-id");
+  id.textContent = user.sub.length > 18 ? `${user.sub.slice(0, 18)}…` : user.sub;
+  id.title = user.sub;
+  // One chip per scope the Orders API uses: granted ones are marked, missing ones explain a 403.
+  $("user-card-scopes").replaceChildren(...ORDERS_SCOPES.split(" ").map((scope) => {
+    const granted = state.session !== null && state.session.scopes.has(scope);
+    return Object.assign(document.createElement("span"), {
+      className: `scope ${granted ? "granted" : "missing"}`,
+      textContent: `${granted ? "✓" : "✗"} ${scope.split(":")[1]}`,
+      title: `${scope}: ${granted ? "granted" : "not granted"}`,
+    });
+  }));
+  $("user-card-session").textContent = state.session ? describeExpiry(state.session.expiresAt) : "unknown";
+}
+
+function toggleUserCard(open) {
+  const card = $("user-card");
+  const show = open ?? card.hidden;
+  if (show) renderUserCard();
+  card.hidden = !show;
+  $("user-chip").setAttribute("aria-expanded", String(show));
+}
+
+function renderSession() {
+  const signedIn = state.user !== null;
+  $("login").hidden = signedIn || !auth0Client;
+  $("user-menu").hidden = !signedIn;
+  if (signedIn) {
+    renderAvatar($("user-avatar"), state.user);
+    $("user-name").textContent = displayName(state.user);
+  }
+  $("session-user").textContent = signedIn ? ""
+    : auth0Client ? "Not signed in" : "Login not configured (see config.example.js)";
+  $("login-hint").hidden = signedIn;
+  $("orders-hint").hidden = signedIn;
+  $("lookup-form").hidden = !signedIn;
+}
+
 // ---------- API ----------
 class ApiError extends Error {
   constructor(status, body) {
@@ -47,13 +199,20 @@ class ApiError extends Error {
   }
 }
 
-async function api(method, path, { body, headers } = {}) {
+async function api(method, path, { body, headers, auth = false } = {}) {
   if (!API) throw new ApiError(0, { message: "API URL not configured. Run scripts/configure_frontend.sh." });
+  const sent = { ...headers };
+  if (body) sent["content-type"] = "application/json";
+  if (auth) {
+    // Only the Orders calls carry the access token; the public menu is fetched without one.
+    if (!state.user) throw new ApiError(401, { code: "UNAUTHENTICATED", message: "Please log in first." });
+    sent.authorization = `Bearer ${await accessToken()}`;
+  }
   let response;
   try {
     response = await fetch(API + path, {
       method,
-      headers: body ? { "content-type": "application/json", ...headers } : headers,
+      headers: sent,
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch {
@@ -91,6 +250,8 @@ function setMessage(el, text, kind) {
 
 // Friendlier wording for the API's error codes; the API message is the fallback.
 const FRIENDLY_ERRORS = {
+  UNAUTHENTICATED: "Please log in again to continue.",
+  INSUFFICIENT_SCOPE: "Your sign-in does not allow this action.",
   PRODUCT_UNAVAILABLE: "One of the products in your cart is not available right now.",
   UNKNOWN_PRODUCT: "One of the products in your cart is no longer on the menu.",
   INVALID_REQUEST: "The order could not be accepted. Please review your cart.",
@@ -102,7 +263,9 @@ const FRIENDLY_ERRORS = {
 
 function describe(error) {
   const ref = error.requestId ? ` (ref. ${error.requestId})` : "";
-  return `${FRIENDLY_ERRORS[error.code] || error.message}${ref}`;
+  // The gateway's own 401/403 (rejected token or missing scope) carry no code, only the status.
+  const code = error.code || { 401: "UNAUTHENTICATED", 403: "INSUFFICIENT_SCOPE" }[error.status];
+  return `${FRIENDLY_ERRORS[code] || error.message}${ref}`;
 }
 
 async function copyText(text, button) {
@@ -228,7 +391,7 @@ function renderCart() {
   $("cart-empty").hidden = state.cart.size > 0;
   $("cart-total").textContent = state.cart.size ? money(total, currency) : "—";
   const button = $("submit-order");
-  button.disabled = state.cart.size === 0 || state.submitting;
+  button.disabled = state.cart.size === 0 || state.submitting;  // logged out: the click explains how to continue
   button.textContent = state.submitting ? "Placing order…" : isRetry() ? "Retry order" : "Place order";
 }
 
@@ -237,12 +400,17 @@ function isRetry() {
 }
 
 async function submitOrder() {
+  if (!state.user) {
+    // The menu and the cart are public; placing an order needs a signed-in user.
+    showBanner();
+    return;
+  }
   const payload = cartPayload();
   const payloadJson = JSON.stringify(payload);
   // A new submission gets a new key; a retry of the same, unchanged submission reuses its key.
   if (!isRetry()) {
     state.pending = { key: newIdempotencyKey(), payload: payloadJson };
-    save(STORAGE.pending, state.pending);
+    save(userKey("pendingSubmission"), state.pending);
   }
   state.submitting = true;
   renderCart();
@@ -251,6 +419,7 @@ async function submitOrder() {
     const { status, data } = await api("POST", "/orders", {
       body: payload,
       headers: { "Idempotency-Key": state.pending.key },
+      auth: true,
     });
     state.searchedOrder = null;  // a new order is always shown with the others
     rememberOrder(data.orderId);
@@ -259,7 +428,7 @@ async function submitOrder() {
     state.cart.clear();
     save(STORAGE.cart, []);
     state.pending = null;
-    save(STORAGE.pending, null);
+    save(userKey("pendingSubmission"), null);
     setMessage($("submit-message"), "");
     showConfirmation(data, status !== 201);
   } catch (error) {
@@ -268,7 +437,7 @@ async function submitOrder() {
       setMessage($("submit-message"), `${describe(error)} Your cart is kept; press “Retry order” to try again safely.`, "warn");
     } else {
       state.pending = null;
-      save(STORAGE.pending, null);
+      save(userKey("pendingSubmission"), null);
       setMessage($("submit-message"), `Order rejected: ${describe(error)}`, "error");
       if (error.code === "PRODUCT_UNAVAILABLE" || error.code === "UNKNOWN_PRODUCT") loadMenu();
     }
@@ -282,12 +451,12 @@ async function submitOrder() {
 // ---------- orders ----------
 function rememberOrder(orderId) {
   state.knownOrders = [orderId, ...state.knownOrders.filter((id) => id !== orderId)].slice(0, 50);
-  save(STORAGE.orders, state.knownOrders);
+  save(userKey("knownOrders"), state.knownOrders);
 }
 
 function forgetOrder(orderId) {
   state.knownOrders = state.knownOrders.filter((id) => id !== orderId);
-  save(STORAGE.orders, state.knownOrders);
+  save(userKey("knownOrders"), state.knownOrders);
   const card = cardFor(orderId);
   if (card) card.remove();
 }
@@ -340,7 +509,7 @@ function showCardError(orderId, error) {
 
 async function refreshOrder(orderId) {
   try {
-    const { data } = await api("GET", `/orders/${encodeURIComponent(orderId)}`);
+    const { data } = await api("GET", `/orders/${encodeURIComponent(orderId)}`, { auth: true });
     upsertOrderCard(data);
     return data;
   } catch (error) {
@@ -355,7 +524,7 @@ async function cancelOrder(orderId) {
   const button = card.querySelector(".cancel");
   button.disabled = true;
   try {
-    const { data } = await api("POST", `/orders/${encodeURIComponent(orderId)}/cancel`);
+    const { data } = await api("POST", `/orders/${encodeURIComponent(orderId)}/cancel`, { auth: true });
     upsertOrderCard(data);
     setMessage(card.querySelector(".order-message"), "Order cancelled.", "ok");
   } catch (error) {
@@ -386,7 +555,7 @@ async function lookupOrder(event) {
   if (!orderId) return;
   setMessage($("orders-message"), "Looking up order…");
   try {
-    const { data } = await api("GET", `/orders/${encodeURIComponent(orderId)}`);
+    const { data } = await api("GET", `/orders/${encodeURIComponent(orderId)}`, { auth: true });
     rememberOrder(data.orderId);
     upsertOrderCard(data);
     $("lookup-id").value = data.orderId;
@@ -402,11 +571,21 @@ async function lookupOrder(event) {
 }
 
 // ---------- start ----------
-function init() {
+async function init() {
   $("api-status").textContent = API ? `API: ${API}` : "API URL not configured";
+  STORAGE.legacy.forEach((key) => save(key, null));
   state.cart = new Map(load(STORAGE.cart, []).filter(([, q]) => Number.isInteger(q) && q >= 1 && q <= MAX_QTY));
-  state.pending = load(STORAGE.pending, null);
-  state.knownOrders = load(STORAGE.orders, []).filter((id) => typeof id === "string");
+  $("login").addEventListener("click", () => auth0Client.loginWithRedirect());
+  $("banner-close").addEventListener("click", hideBanner);
+  $("user-chip").addEventListener("click", () => toggleUserCard());
+  document.addEventListener("click", (event) => {
+    if (!$("user-menu").contains(event.target)) toggleUserCard(false);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") toggleUserCard(false);
+  });
+  $("logout").addEventListener("click",
+    () => auth0Client.logout({ logoutParams: { returnTo: window.location.origin } }));
   $("submit-order").addEventListener("click", submitOrder);
   $("lookup-form").addEventListener("submit", lookupOrder);
   $("show-all").addEventListener("click", showAllOrders);
@@ -414,11 +593,21 @@ function init() {
   $("new-order").addEventListener("click", () => { hideConfirmation(); setMessage($("submit-message"), ""); });
   $("confirmation-copy").addEventListener("click",
     () => copyText($("confirmation-code").textContent, $("confirmation-copy")));
+  renderCart();
+  loadMenu();  // public: works before and without login
+
+  await initAuth();
+  renderSession();
+  if (!state.user) {
+    renderCart();
+    return;
+  }
+  state.pending = load(userKey("pendingSubmission"), null);
+  state.knownOrders = load(userKey("knownOrders"), []).filter((id) => typeof id === "string");
   if (state.pending && isRetry()) {
     setMessage($("submit-message"), "A previous submission was not confirmed. Press “Retry order” to finish it safely.", "warn");
   }
   renderCart();
-  loadMenu();
   // Known order IDs come from local storage; their state always comes from the API.
   state.knownOrders.forEach((id) => { ensureCard(id); refreshOrder(id); });
 }

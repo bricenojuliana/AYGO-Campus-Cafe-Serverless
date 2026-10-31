@@ -361,6 +361,12 @@ Resources:
       SourceArn: !Sub arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${CafeHttpApi}/*/*/orders*
 
 Outputs:
+  Auth0Issuer:
+    Description: Token issuer accepted by the Orders authorizer (scripts/configure_frontend.sh derives the Auth0 domain from it)
+    Value: !Ref Auth0Issuer
+  Auth0Audience:
+    Description: Audience (API identifier) the frontend must request access tokens for
+    Value: !Ref Auth0Audience
   Currency:
     Description: The application's currency (read by scripts/seed_catalog.py to validate the seed)
     Value: !Ref Currency
