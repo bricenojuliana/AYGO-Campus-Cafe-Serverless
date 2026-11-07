@@ -283,6 +283,11 @@ components:
     CreateOrderRequest:
       type: object
       additionalProperties: false
+      description: |
+        Only `items` is accepted. The owner of the order comes from the verified access token, never from
+        the body: ownership fields such as `owner`, `ownerSub`, `ownerIssuer`, `ownerIss`, `ownerId`,
+        `customerId`, `sub` or `iss` (at the top level or inside a line) are rejected with 400
+        `INVALID_REQUEST` and nothing is stored. Prices and totals are rejected the same way.
       required: [items]
       properties:
         items:

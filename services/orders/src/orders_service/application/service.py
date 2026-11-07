@@ -87,7 +87,8 @@ class OrderService:
                 return current
             try:
                 # The write is conditional on the stored owner too, not only on the check above.
-                self._repository.replace_order(updated, expected_version=current.version, owner=caller)
+                self._repository.replace_order(updated, expected_version=current.version, owner=caller,
+                                               expected_status=current.status)
                 return updated
             except VersionConflict:
                 continue

@@ -73,11 +73,24 @@ def test_identity_claimed_in_headers_or_body_is_ignored(service, repository):
     assert repository.orders == {} and repository.records == {}
 
 
-def test_ownership_fields_in_create_input_are_rejected(service):
-    for field in ("customerId", "ownerId", "ownerSub"):
-        event = orders_events(claims=TEST_CLAIMS, body={**BODY, field: "auth0|someone-else"})[0]
-        response = handle(event, service, time.monotonic() + 5)
-        assert (response["statusCode"], json.loads(response["body"])["code"]) == (400, "INVALID_REQUEST")
+# S1: ownership is never accepted from the client. The create body allows only "items", so these (and any
+# other unknown field) get a validation error; the list documents the ones the workshop names explicitly.
+FORBIDDEN_OWNER_FIELDS = ("owner", "ownerSub", "ownerIssuer", "ownerIss", "ownerId", "customerId", "sub", "iss")
+
+
+@pytest.mark.parametrize("field", FORBIDDEN_OWNER_FIELDS)
+def test_ownership_fields_in_create_input_are_rejected_and_nothing_is_written(service, repository, catalog, field):
+    event = orders_events(claims=TEST_CLAIMS, body={**BODY, field: "auth0|someone-else"})[0]
+    response = handle(event, service, time.monotonic() + 5)
+    assert (response["statusCode"], json.loads(response["body"])["code"]) == (400, "INVALID_REQUEST")
+    assert field in json.loads(response["body"])["message"]
+    assert catalog.calls == 0 and repository.orders == {} and repository.records == {}
+
+
+def test_ownership_inside_an_item_line_is_rejected_too(service, repository):
+    body = {"items": [{**BODY["items"][0], "owner": "auth0|someone-else"}]}
+    response = handle(orders_events(claims=TEST_CLAIMS, body=body)[0], service, time.monotonic() + 5)
+    assert response["statusCode"] == 400 and repository.orders == {}
 
 
 def test_verified_claims_become_the_principal():
@@ -89,3 +102,13 @@ def test_verified_claims_become_the_principal():
 def test_missing_context_raises_instead_of_defaulting_to_anonymous():
     with pytest.raises(Unauthenticated):
         principal_from_event(http_api_event("GET /orders/{orderId}", "/orders/x"))
+
+
+def test_missing_context_leaves_a_safe_diagnostic_without_the_token(service, caplog):
+    event = orders_events(claims=None, headers={"authorization": "Bearer secret-token-value"})[0]
+    with caplog.at_level("WARNING"):
+        assert handle(event, service, time.monotonic() + 5)["statusCode"] == 401
+    lines = [json.loads(r.getMessage()) for r in caplog.records if "rejected inside Orders" in r.getMessage()]
+    assert lines == [{"msg": "request rejected inside Orders", "code": "UNAUTHENTICATED",
+                      "requestId": "req-1", "routeKey": "POST /orders"}]
+    assert "secret-token-value" not in caplog.text

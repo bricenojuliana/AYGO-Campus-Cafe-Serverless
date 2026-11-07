@@ -2,6 +2,7 @@
 user's stored response is never returned to another."""
 import itertools
 import time
+from dataclasses import replace
 
 import pytest
 
@@ -51,9 +52,14 @@ def repository():
 
 
 @pytest.fixture
-def service(repository):
+def catalog():
+    return FakeCatalog()
+
+
+@pytest.fixture
+def service(repository, catalog):
     ids = (f"CC-0000-{n:04d}" for n in itertools.count(1))
-    return OrderService(repository, FakeCatalog(), id_factory=lambda: next(ids),
+    return OrderService(repository, catalog, id_factory=lambda: next(ids),
                         currency=CURRENCY, idempotency_ttl_seconds=IDEMPOTENCY_TTL_SECONDS)
 
 
@@ -97,3 +103,18 @@ def test_stored_record_is_scoped_and_owned(service, repository):
     (stored_key, record), = repository.records.items()
     assert stored_key == idempotency_scope_key(OWNER.issuer, OWNER.subject, KEY) != KEY
     assert isinstance(record, IdempotencyRecord) and record.belongs_to(OWNER)
+
+
+def test_replay_keeps_the_original_price_snapshot_after_catalog_prices_change(service, catalog):
+    """S10: an identical retry returns the original order and prices; it is never repriced."""
+    product_id = BODY["items"][0]["productId"]
+    first = service.create_order(KEY, BODY, deadline(), OWNER)
+    calls = catalog.calls
+    catalog.products[product_id] = replace(catalog.products[product_id], price_cents=999)  # Catalog changes price
+
+    again = service.create_order(KEY, BODY, deadline(), OWNER)
+    assert again.replayed and again.body == first.body
+    assert again.body["items"][0]["unitPriceCents"] != 999 and catalog.calls == calls  # no Catalog call on replay
+
+    fresh = service.create_order("retry-key-new", BODY, deadline(), OWNER)  # a new order uses the new price
+    assert fresh.body["items"][0]["unitPriceCents"] == 999

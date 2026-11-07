@@ -117,18 +117,24 @@ class DynamoOrderRepository:
         item = self._get(ORDER_PREFIX + order_id)
         return order_from_item(item) if item else None
 
-    def replace_order(self, order: Order, expected_version: int, owner: Principal) -> None:
+    def replace_order(self, order: Order, expected_version: int, owner: Principal, expected_status: str) -> None:
         try:
             self._client.put_item(
                 TableName=self._table,
                 Item=_to_ddb(order_to_item(order)),
-                # attribute_exists keeps a cancellation from ever creating an order; the owner condition
-                # makes DynamoDB itself refuse a write by anyone but the stored owner.
+                # Checked by DynamoDB at write time, not only by the service before it:
+                # - attribute_exists: a cancellation never creates an order;
+                # - owner pair: nobody but the stored owner can write;
+                # - status: the transition starts from the state the service validated (e.g. CREATED);
+                # - version: no concurrent change since the read.
                 ConditionExpression=("attribute_exists(pk) AND version = :expected"
-                                     " AND ownerIss = :owner_iss AND ownerSub = :owner_sub"),
+                                     " AND ownerIss = :owner_iss AND ownerSub = :owner_sub"
+                                     " AND #status = :expected_status"),
+                ExpressionAttributeNames={"#status": "status"},  # "status" is a DynamoDB reserved word
                 ExpressionAttributeValues={":expected": {"N": str(expected_version)},
                                            ":owner_iss": {"S": owner.issuer},
-                                           ":owner_sub": {"S": owner.subject}},
+                                           ":owner_sub": {"S": owner.subject},
+                                           ":expected_status": {"S": expected_status}},
             )
         except ClientError as exc:
             if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":

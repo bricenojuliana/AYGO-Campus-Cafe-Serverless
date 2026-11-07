@@ -37,6 +37,7 @@ class OrderRepository(Protocol):
     def get_order(self, order_id: str) -> Optional[Order]:
         ...
 
-    def replace_order(self, order: Order, expected_version: int, owner: Principal) -> None:
-        """Stores `order` only if the stored order exists, still has `expected_version` and belongs to
-        `owner` (issuer and subject); otherwise raises VersionConflict. Never creates an order."""
+    def replace_order(self, order: Order, expected_version: int, owner: Principal, expected_status: str) -> None:
+        """Stores `order` only if the stored order exists, still has `expected_version` and
+        `expected_status`, and belongs to `owner` (issuer and subject); otherwise raises VersionConflict.
+        Never creates an order."""

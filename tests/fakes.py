@@ -62,11 +62,11 @@ class InMemoryOrderRepository:
     def get_order(self, order_id):
         return self.orders.get(order_id)
 
-    def replace_order(self, order, expected_version, owner):
+    def replace_order(self, order, expected_version, owner, expected_status):
         with self.lock:
             current = self.orders.get(order.order_id)
-            # Same condition as DynamoDB: exists, same version, and stored owner == owner.
-            if (current is None or current.version != expected_version
+            # Same condition as DynamoDB: exists, same version, same status, and stored owner == owner.
+            if (current is None or current.version != expected_version or current.status != expected_status
                     or (current.owner_issuer, current.owner_subject) != (owner.issuer, owner.subject)):
                 raise VersionConflict(order.order_id)
             self.orders[order.order_id] = order

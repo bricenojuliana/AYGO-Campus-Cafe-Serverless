@@ -41,3 +41,11 @@ def test_catalog_log_records_well_formed_correlation_ids_only():
     assert catalog_request_log(good, Context(), response, time.monotonic())["correlationId"] == "Abc123=="
     assert catalog_request_log(bad, Context(), response, time.monotonic())["correlationId"] is None
     assert catalog_request_log(good, Context(), response, time.monotonic())["operation"] == "ListProducts"
+
+
+def test_request_log_never_contains_the_bearer_token():
+    """S9: the per-request log line carries correlation data, never the Authorization header."""
+    event = http_api_event("GET /orders/{orderId}", f"/orders/{ORDER_ID}", path_parameters={"orderId": ORDER_ID},
+                           headers={"Authorization": "Bearer secret-token-value"})
+    line = json.dumps(orders_request_log(event, Context(), json_response(200, {"orderId": ORDER_ID}), time.monotonic()))
+    assert "secret-token-value" not in line and "authorization" not in line.lower()

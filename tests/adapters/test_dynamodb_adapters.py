@@ -99,11 +99,11 @@ def test_expired_record_is_ignored_and_can_be_replaced(orders_repo):
 def test_conditional_replace_never_creates_and_detects_conflicts(orders_repo):
     order = sample_order()
     with pytest.raises(VersionConflict):
-        orders_repo.replace_order(order, expected_version=1, owner=OWNER)
+        orders_repo.replace_order(order, expected_version=1, owner=OWNER, expected_status="CREATED")
     assert orders_repo.get_order("CC-0000-0001") is None
     orders_repo.create_order(order, record_for(order), NOW)
     with pytest.raises(VersionConflict):
-        orders_repo.replace_order(order, expected_version=7, owner=OWNER)
+        orders_repo.replace_order(order, expected_version=7, owner=OWNER, expected_status="CREATED")
 
 
 def test_idempotency_record_keeps_its_owner(orders_repo):
@@ -124,10 +124,48 @@ def test_owner_is_stored_and_dynamodb_refuses_a_cancel_by_anyone_else(orders_rep
     for intruder in (Principal(OWNER.issuer, "auth0|someone-else"),     # same issuer, other user
                      Principal("https://other-tenant.example.com/", OWNER.subject)):  # same sub, other issuer
         with pytest.raises(VersionConflict):
-            orders_repo.replace_order(cancelled_order, expected_version=1, owner=intruder)
+            orders_repo.replace_order(cancelled_order, expected_version=1, owner=intruder, expected_status="CREATED")
     assert orders_repo.get_order("CC-0000-0001").status == "CREATED"
-    orders_repo.replace_order(cancelled_order, expected_version=1, owner=OWNER)
+    orders_repo.replace_order(cancelled_order, expected_version=1, owner=OWNER, expected_status="CREATED")
     assert orders_repo.get_order("CC-0000-0001").status == "CANCELLED"
+
+
+def test_cancel_write_carries_owner_and_status_in_its_condition(orders_repo, aws):
+    """S4: the rule is enforced by DynamoDB at write time, not only by a check before the write."""
+    order = sample_order()
+    orders_repo.create_order(order, record_for(order), NOW)
+    sent = {}
+    real_put = aws.put_item
+
+    def recording_put(**kwargs):
+        sent.update(kwargs)
+        return real_put(**kwargs)
+
+    orders_repo._client.put_item = recording_put
+    orders_repo.replace_order(replace(order, status="CANCELLED", version=2), expected_version=1, owner=OWNER,
+                              expected_status="CREATED")
+    condition = sent["ConditionExpression"]
+    for clause in ("attribute_exists(pk)", "version = :expected", "ownerIss = :owner_iss",
+                   "ownerSub = :owner_sub", "#status = :expected_status"):
+        assert clause in condition
+    assert sent["ExpressionAttributeNames"] == {"#status": "status"}
+    values = sent["ExpressionAttributeValues"]
+    assert (values[":owner_iss"]["S"], values[":owner_sub"]["S"]) == (OWNER.issuer, OWNER.subject)
+    assert values[":expected_status"]["S"] == "CREATED"
+
+
+def test_a_racing_status_change_cannot_be_overwritten(orders_repo, aws):
+    """S4: even with the same version, a write that expects CREATED loses if the stored status changed."""
+    order = sample_order()
+    orders_repo.create_order(order, record_for(order), NOW)
+    aws.update_item(TableName="orders", Key={"pk": {"S": "ORDER#CC-0000-0001"}},  # concurrent writer
+                    UpdateExpression="SET #s = :c", ExpressionAttributeNames={"#s": "status"},
+                    ExpressionAttributeValues={":c": {"S": "CANCELLED"}})
+    with pytest.raises(VersionConflict):
+        orders_repo.replace_order(replace(order, status="CANCELLED", updated_at="later", version=2),
+                                  expected_version=1, owner=OWNER, expected_status="CREATED")
+    stored = orders_repo.get_order("CC-0000-0001")
+    assert (stored.status, stored.version, stored.updated_at) == ("CANCELLED", 1, order.updated_at)
 
 
 def test_legacy_order_without_owner_cannot_be_replaced(orders_repo, aws):
@@ -135,7 +173,7 @@ def test_legacy_order_without_owner_cannot_be_replaced(orders_repo, aws):
     orders_repo.create_order(legacy, record_for(legacy), NOW)
     assert "ownerIss" not in aws.get_item(TableName="orders", Key={"pk": {"S": "ORDER#CC-0000-0001"}})["Item"]
     with pytest.raises(VersionConflict):
-        orders_repo.replace_order(replace(legacy, status="CANCELLED", version=2), expected_version=1, owner=OWNER)
+        orders_repo.replace_order(replace(legacy, status="CANCELLED", version=2), expected_version=1, owner=OWNER, expected_status="CREATED")
 
 
 def test_service_end_to_end_on_dynamodb(orders_repo):

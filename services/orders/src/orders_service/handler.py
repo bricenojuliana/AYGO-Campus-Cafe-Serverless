@@ -10,7 +10,7 @@ from .adapters.catalog_http_client import correlation_id
 from .api.auth import principal_from_event, require_scope
 from .api.observability import emit_metric, request_log
 from .api.responses import error_response, error_status_of, json_response, request_id_of
-from .domain.errors import InvalidRequest, OrderError
+from .domain.errors import InsufficientScope, InvalidRequest, OrderError, Unauthenticated
 
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
@@ -102,6 +102,11 @@ def handle(event: dict, service, deadline: float) -> dict:
             emit_metric("DependencyFailures")
             logger.warning(json.dumps({"msg": "dependency failure", "code": exc.code, "requestId": request_id,
                                        "orderId": order_id or None}))
+        elif isinstance(exc, (Unauthenticated, InsufficientScope)):
+            # Behind the JWT authorizer this should never happen: it points to a misconfigured or bypassed
+            # route. Safe diagnostic only: request ID, route and reason; never headers, tokens or claims.
+            logger.warning(json.dumps({"msg": "request rejected inside Orders", "code": exc.code,
+                                       "requestId": request_id, "routeKey": route_key}))
         return error_response(mapped.status, exc.code, exc.message, request_id, mapped.headers)
 
     return error_response(HTTPStatus.NOT_FOUND, "ROUTE_NOT_FOUND", "No such route.", request_id)
