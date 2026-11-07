@@ -1,6 +1,6 @@
 # Evidence runs
 
-Actual output of the local checks and of the checks run against the deployed stack (us-east-1, AWS Academy Learner Lab, runtime python3.13). These files are command output, never hand-edited.
+Actual output of the local checks and of the checks run against the deployed stack (us-east-1, AWS Academy Learner Lab, runtime python3.13). These files are command output, never hand-edited, except that identifiers of the lab and the identity tenant are replaced with placeholders before sharing: `<aws-account-id>`, `<lab-policy-N>` (AWS Academy policy names), `<auth0-tenant>` and `<spa-client-id>`. `tests/infra/test_template.py::test_no_lab_account_or_tenant_identifiers_in_committed_files` keeps them out.
 
 | File | Command | Result |
 |---|---|---|

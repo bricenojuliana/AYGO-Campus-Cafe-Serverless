@@ -30,7 +30,7 @@
 <g id="node2" class="node">
 <title>idp</title>
 <path fill="#ede9fe" stroke="#94a3b8" stroke-width="1.2" d="M912,-62C912,-62 582,-62 582,-62 576,-62 570,-56 570,-50 570,-50 570,-12 570,-12 570,-6 576,0 582,0 582,0 912,0 912,0 918,0 924,-6 924,-12 924,-12 924,-50 924,-50 924,-56 918,-62 912,-62"/>
-<text text-anchor="middle" x="747" y="-46.2" font-family="Helvetica,sans-Serif" font-size="11.00">Auth0 tenant &#160;dev&#45;…us.auth0.com</text>
+<text text-anchor="middle" x="747" y="-46.2" font-family="Helvetica,sans-Serif" font-size="11.00">Auth0 tenant &#160;&lt;auth0&#45;tenant&gt;.us.auth0.com</text>
 <text text-anchor="middle" x="747" y="-34.2" font-family="Helvetica,sans-Serif" font-size="11.00">API &#39;Campus Café API&#39; &#160;aud https://campus&#45;cafe&#45;api · RS256</text>
 <text text-anchor="middle" x="747" y="-22.2" font-family="Helvetica,sans-Serif" font-size="11.00">RBAC on · role Customer = orders:create/read/cancel</text>
 <text text-anchor="middle" x="747" y="-10.2" font-family="Helvetica,sans-Serif" font-size="11.00">users Alice, Bob (Customer) · Carol (orders:read only)</text>

@@ -7,7 +7,7 @@ digraph campus_cafe_security {
   edge  [fontname="Helvetica", fontsize=9, color="#64748b", arrowsize=0.7];
 
   spa [fillcolor="#e0f2fe", label="Browser SPA  (http://localhost:8080)\n@auth0/auth0-spa-js 2.28.4 (pinned + SRI)\nAuthorization Code + PKCE · no client secret\ntokens in SDK memory · ID token only for display"];
-  idp [fillcolor="#ede9fe", label="Auth0 tenant  dev-…us.auth0.com\nAPI 'Campus Café API'  aud https://campus-cafe-api · RS256\nRBAC on · role Customer = orders:create/read/cancel\nusers Alice, Bob (Customer) · Carol (orders:read only)"];
+  idp [fillcolor="#ede9fe", label="Auth0 tenant  <auth0-tenant>.us.auth0.com\nAPI 'Campus Café API'  aud https://campus-cafe-api · RS256\nRBAC on · role Customer = orders:create/read/cancel\nusers Alice, Bob (Customer) · Carol (orders:read only)"];
 
   subgraph cluster_aws {
     label="AWS ACADEMY LEARNER LAB · us-east-1 · stack campus-cafe · existing LabRole (ExecutionRoleArn) · no IAM resources added";

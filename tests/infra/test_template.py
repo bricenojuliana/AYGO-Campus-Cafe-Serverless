@@ -90,8 +90,8 @@ def test_authorizer_accepts_only_auth0_access_tokens_for_this_api(template, reso
     assert props["JwtConfiguration"] == {"Issuer": {"Ref": "Auth0Issuer"}, "Audience": [{"Ref": "Auth0Audience"}]}
     params = template["Parameters"]
     issuer = re.compile(params["Auth0Issuer"]["AllowedPattern"])
-    assert issuer.match("https://campus-cafe.us.auth0.com/")
-    for bad in ("https://campus-cafe.us.auth0.com", "http://campus-cafe.us.auth0.com/", "campus-cafe.us.auth0.com"):
+    assert issuer.match("https://your-tenant.us.auth0.com/")
+    for bad in ("https://your-tenant.us.auth0.com", "http://your-tenant.us.auth0.com/", "your-tenant.us.auth0.com"):
         assert not issuer.match(bad)  # exact iss string: https and the trailing slash matter
     assert "Default" not in params["Auth0Issuer"] and "Default" not in params["Auth0Audience"]
 
@@ -223,3 +223,25 @@ def test_no_credentials_in_repository():
                 and path.suffix in {".py", ".yaml", ".toml", ".js", ".html", ".json", ".md", ".sh", ".txt", ".csv"}:
             text = path.read_text(errors="ignore")
             assert not any(pattern.search(text) for pattern in suspicious), path
+
+
+def test_no_lab_account_or_tenant_identifiers_in_committed_files():
+    """Evidence is shared publicly: the AWS account, lab policy names and the Auth0 tenant are replaced with
+    placeholders (<aws-account-id>, <lab-policy-N>, <auth0-tenant>). Patterns are generic on purpose."""
+    import subprocess
+
+    identifying = [
+        re.compile(r"arn:aws:iam::(?!123456789012)\d{12}:"),          # a real account in an ARN (123456789012 = AWS example)
+        re.compile(r"Account: `\d{12}`"),
+        re.compile("VocLab" + "Policy"),                                # AWS Academy lab policy names
+    ]
+    tenant = re.compile(r"(?<![A-Za-z0-9.-])([a-z0-9-]+)\.(?:us\.|eu\.|au\.|jp\.)?auth0\.com")  # a concrete Auth0 tenant
+    placeholders = {"your-tenant", "dev-xxxx", "tenant"}
+    tracked = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
+    for name in tracked:
+        path = ROOT / name
+        if path.suffix in {".md", ".txt", ".py", ".yaml", ".js", ".html", ".json", ".dot", ".svg", ".sh", ".toml"}:
+            text = path.read_text(errors="ignore")
+            found = [p.pattern for p in identifying if p.search(text)]
+            found += [m.group(0) for m in tenant.finditer(text) if m.group(1) not in placeholders]
+            assert not found, f"{name}: {found}"
