@@ -139,9 +139,11 @@ def test_each_service_role_reaches_only_its_own_table_and_log_group(resources):
     assert len(of_type(resources, "AWS::DynamoDB::Table")) == 2
 
 
-def test_least_privilege_roles_are_the_default_and_a_shared_role_is_opt_in(template, resources):
+def test_least_privilege_roles_unless_a_shared_role_is_given_explicitly(template, resources):
     parameter = template["Parameters"]["ExecutionRoleArn"]
-    assert parameter["Default"] == ""
+    # The deployer answers explicitly; an empty answer creates the least-privilege roles. No Default:
+    # older cfn-lint releases flag a "" default against the role-ARN pattern (false positive).
+    assert "Default" not in parameter
     assert template["Conditions"]["CreateServiceRoles"] == {"Equals": [{"Ref": "ExecutionRoleArn"}, ""]}
     for role in ("CatalogRole", "OrdersRole"):
         assert resources[role]["Condition"] == "CreateServiceRoles"

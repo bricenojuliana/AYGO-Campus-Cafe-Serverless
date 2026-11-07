@@ -62,10 +62,11 @@ Parameters:
       https://campus-cafe-api. Not the SPA client ID: ID tokens must not be accepted.
   ExecutionRoleArn:
     Type: String
-    Default: ""
+    # No Default on purpose: older cfn-lint releases (e.g. 1.20-1.40, used by SAM in CloudShell) check a
+    # "" default against the role-ARN pattern even though the "" branch of the !If never uses it.
     AllowedPattern: "^(arn:aws[a-zA-Z-]*:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+)?$"
     Description: >-
-      Leave empty to create the least-privilege CatalogRole and OrdersRole. Only for accounts that
+      Answer empty to create the least-privilege CatalogRole and OrdersRole. Only for accounts that
       forbid iam:CreateRole (e.g. AWS Academy Learner Lab): the ARN of an existing role (LabRole)
       that both functions will use instead. That role is broader than least privilege.
 

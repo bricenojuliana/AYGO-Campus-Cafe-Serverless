@@ -168,7 +168,7 @@ In guided mode accept the `campus-cafe` stack and the region, review the paramet
 | `IdempotencyTtlHours` | `24` | how long Orders remembers an `Idempotency-Key` |
 | `Auth0Issuer` | none (required) | Auth0 issuer exactly as in the token, with the trailing slash, e.g. `https://your-tenant.us.auth0.com/` |
 | `Auth0Audience` | none (required) | identifier of the Campus Café API in Auth0, e.g. `https://campus-cafe-api` (not the SPA client ID) |
-| `ExecutionRoleArn` | empty | empty = create the least-privilege roles; `LabRole` ARN = use that existing role (Learner Lab) |
+| `ExecutionRoleArn` | none (answer it) | empty answer = create the least-privilege roles; `LabRole` ARN = use that existing role (Learner Lab) |
 
 Resulting IAM permissions (least privilege). Each function uses an explicit role (`CatalogRole`, `OrdersRole`) with no AWS managed policies. `AWSLambdaBasicExecutionRole` is not used, because it would allow writing to any log group.
 
