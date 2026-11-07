@@ -10,6 +10,7 @@ Campus Café with an identity and authorization boundary: Auth0 (SPA + PKCE), th
 | [ai-use.md](ai-use.md) | AI-use note |
 | [architecture.svg](architecture.svg), [authorization-flow.svg](authorization-flow.svg) | Diagrams of the implementation (Graphviz sources next to them) |
 | [../evidence/](../evidence/README.md) | Executed outputs: smoke test, quality evidence, local test run |
+| [../evidence/demo-security.webm](../evidence/demo-security.webm) | Demo video (1:43) of the app in the browser: starts logged out (the cart works; ordering needs login), Alice logs in through Auth0 and places an order, orders are confirmed with their codes and listed under "Your orders" (one cancelled), and Carol, who only has `orders:read`, tries to place an order and is rejected ("Your sign-in does not allow this action", 403 from the gateway) |
 
 ![Security architecture as implemented](architecture.svg)
 
@@ -47,7 +48,7 @@ The same table lives in `template.yaml`, `services/orders/src/orders_service/api
 - **Session restore** fails in browsers that block third-party cookies (Brave): users log in again with one click. Tokens were deliberately kept in memory, not in `localStorage`.
 - **Not run:** A1, A2, A4 (no signed fixtures), A3 partially (only through G6), S10 against the deployed stack.
 - **Local evidence** uses fabricated trusted-context events, and the local harness emulates the authorizer without signature checks; neither demonstrates the cloud boundary.
-- **Public repository:** the evidence includes the AWS account ID, Learner Lab policy names and the Auth0 tenant domain (no credentials or tokens).
+- **Public repository:** identifiers of the lab and the tenant are replaced with placeholders in the written evidence, but the demo video shows the Auth0 tenant domain on the Auth0 login page (as any user of the app sees it). The first workshop's evidence on `main` still contains the AWS account ID and lab policy names. No credentials or tokens are published.
 - Not production-ready: no custom Auth0 domain, refresh-token rotation, rate limiting, WAF or staff/tenant roles.
 
 ## Demonstration order

@@ -18,6 +18,8 @@ Actual output of the local checks and of the checks run against the deployed sta
 
 **Demo video:** [demo-ui.webm](demo-ui.webm) shows the application working: the local browser UI calling the deployed API.
 
+**Security demo video:** [demo-security.webm](demo-security.webm) (1:43) shows the Auth0-protected app in the browser: starts logged out (the cart works; ordering needs login), Alice logs in through Auth0 and places an order, orders are confirmed with their codes and listed under "Your orders" (one cancelled), and Carol, who only has `orders:read`, tries to place an order and is rejected ("Your sign-in does not allow this action", 403 from the gateway). It shows the Auth0 login page, including the tenant domain, but no tokens, DevTools or consoles. Replays, cross-user denial and concurrency are evidenced by the smoke run.
+
 The smoke run is the console output copied from CloudShell. It ran against the first deployment, before AWS client creation moved to the Lambda init phase; that change does not alter request handling, and the later evidence run repeats the concurrency, replay and fault checks on the current code.
 
 Notes:
