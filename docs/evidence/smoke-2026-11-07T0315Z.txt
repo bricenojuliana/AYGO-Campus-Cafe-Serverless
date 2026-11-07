@@ -1,0 +1,99 @@
+API: https://5h10bpunv3.execute-api.us-east-1.amazonaws.com
+
+PASS    G1   GET /products without a token -> 200 {items}
+PASS    G1   >= 5 products, one unavailable, one currency
+PASS    G1   GET /products/{id} without a token -> 200
+PASS    G1   GET unknown product -> 404
+PASS    G2   POST /orders without a token -> 401
+PASS    G2   GET /orders/CC-0000-0000 without a token -> 401
+PASS    G2   POST /orders/CC-0000-0000/cancel without a token -> 401
+PASS    G2   POST /orders with a tampered token (broken signature) -> 401
+PASS    G3   Alice POST /orders -> 201 CREATED with Location
+PASS    S8   server-side total
+PASS    G3   Alice GET her order -> 200, same order
+PASS    S5   Alice same key + same body -> 200 original result
+PASS    S5   Alice same key + different body -> 409
+PASS    S1   missing Idempotency-Key -> 400
+PASS    S8   unknown product -> 400
+PASS    S8   unavailable product -> 409 PRODUCT_UNAVAILABLE
+PASS    S8   rejects price override in line -> 400
+PASS    S8   rejects total override -> 400
+PASS    S1   rejects forged owner field -> 400
+PASS    S1   rejects forged customerId -> 400
+PASS    S8   rejects quantity 0 -> 400
+PASS    S8   rejects quantity 11 -> 400
+PASS    S8   rejects fractional quantity -> 400
+PASS    S8   rejects duplicate productId -> 400
+PASS    S8   rejects 11 distinct lines -> 400
+PASS    S8   rejects empty items -> 400
+PASS    S8   rejects malformed productId -> 400
+PASS    S7   5 concurrent identical submissions -> one 201, four 200, one orderId
+PASS    S6   Bob uses Alice's client key -> his own new order (201), never Alice's
+PASS    G3   Bob GET his order -> 200
+PASS    G4   Bob GET Alice's order -> 404, no order data
+PASS    G4   Bob cancels Alice's order -> 404
+PASS    G4   Alice's order unchanged after Bob's attempt
+PASS    G4   Alice GET Bob's order -> 404
+PASS    S2   foreign and missing orders get the same 404 body
+PASS    S3   Alice cancel -> 200 CANCELLED, repeat identical
+PASS    S3   cancellation persisted
+PASS    S5   replay still returns the stored creation result
+PASS    S2   Alice GET missing order -> 404
+PASS    S3   cancel missing order -> 404 and nothing created
+PASS    G5   orders:read-only token POST /orders -> 403
+PASS    G5   orders:read-only token cancel -> 403
+PASS    G5   orders:read-only token GET someone else's order -> 404 (scope is not ownership)
+PASS    G6   ID token instead of the access token -> rejected (not 2xx)
+PASS    CORS preflight allows the frontend origin and the Authorization header
+PASS    CORS preflight does not allow other origins
+
+46 passed, 0 failed, 0 blocked against https://5h10bpunv3.execute-api.us-east-1.amazonaws.com
+
+| ID | Check | Result | Observed |
+|---|---|---|---|
+| G1 | GET /products without a token -> 200 {items} | PASS | 200 |
+| G1 | >= 5 products, one unavailable, one currency | PASS |  |
+| G1 | GET /products/{id} without a token -> 200 | PASS |  |
+| G1 | GET unknown product -> 404 | PASS | 404 |
+| G2 | POST /orders without a token -> 401 | PASS | 401 |
+| G2 | GET /orders/CC-0000-0000 without a token -> 401 | PASS | 401 |
+| G2 | POST /orders/CC-0000-0000/cancel without a token -> 401 | PASS | 401 |
+| G2 | POST /orders with a tampered token (broken signature) -> 401 | PASS | 401 |
+| G3 | Alice POST /orders -> 201 CREATED with Location | PASS | (201, {'orderId': 'CC-S6CE-103M', 'status': 'CREATED', 'items': [{'productId': '6ea4a739-ffff-4dff-b418-d24ae1b4506c', 'name': 'Almojábana', 'quantity': 2, 'uni |
+| S8 | server-side total | PASS |  |
+| G3 | Alice GET her order -> 200, same order | PASS | 200 |
+| S5 | Alice same key + same body -> 200 original result | PASS | 200 |
+| S5 | Alice same key + different body -> 409 | PASS | (409, {'code': 'IDEMPOTENCY_KEY_CONFLICT', 'message': 'This Idempotency-Key was already used with a different request.', 'requestId': 'Gcysajk5IAMEaYA='}) |
+| S1 | missing Idempotency-Key -> 400 | PASS | 400 |
+| S8 | unknown product -> 400 | PASS | 400 |
+| S8 | unavailable product -> 409 PRODUCT_UNAVAILABLE | PASS | (409, {'code': 'PRODUCT_UNAVAILABLE', 'message': 'This product cannot be ordered: 3652aa12-2434-4ea6-8083-d18554ec0106.', 'requestId': 'GcysdjLFoAMEaJA='}) |
+| S8 | rejects price override in line -> 400 | PASS | (400, {'code': 'INVALID_REQUEST', 'message': 'items[0] must have exactly productId and quantity.', 'requestId': 'GcysejPAoAMEaxA='}) |
+| S8 | rejects total override -> 400 | PASS | (400, {'code': 'INVALID_REQUEST', 'message': 'Unknown fields: totalCents.', 'requestId': 'GcysfgNkIAMEadg='}) |
+| S1 | rejects forged owner field -> 400 | PASS | (400, {'code': 'INVALID_REQUEST', 'message': 'Unknown fields: ownerSub.', 'requestId': 'GcysggWPoAMEamA='}) |
+| S1 | rejects forged customerId -> 400 | PASS | (400, {'code': 'INVALID_REQUEST', 'message': 'Unknown fields: customerId.', 'requestId': 'GcyshiN7IAMEaCw='}) |
+| S8 | rejects quantity 0 -> 400 | PASS | (400, {'code': 'INVALID_REQUEST', 'message': 'items[0].quantity must be an integer from 1 to 10.', 'requestId': 'GcysiihvIAMESQQ='}) |
+| S8 | rejects quantity 11 -> 400 | PASS | (400, {'code': 'INVALID_REQUEST', 'message': 'items[0].quantity must be an integer from 1 to 10.', 'requestId': 'GcysjjiCoAMESVQ='}) |
+| S8 | rejects fractional quantity -> 400 | PASS | (400, {'code': 'INVALID_REQUEST', 'message': 'items[0].quantity must be an integer from 1 to 10.', 'requestId': 'Gcysjhz0oAMESjQ='}) |
+| S8 | rejects duplicate productId -> 400 | PASS | (400, {'code': 'INVALID_REQUEST', 'message': "productId '6ea4a739-ffff-4dff-b418-d24ae1b4506c' appears more than once.", 'requestId': 'GcyskhKEoAMES8w='}) |
+| S8 | rejects 11 distinct lines -> 400 | PASS | (400, {'code': 'INVALID_REQUEST', 'message': 'An order can contain at most 10 products.', 'requestId': 'Gcyslg1kIAMESJw='}) |
+| S8 | rejects empty items -> 400 | PASS | (400, {'code': 'INVALID_REQUEST', 'message': 'items must be a non-empty array.', 'requestId': 'GcysmjPQIAMESsQ='}) |
+| S8 | rejects malformed productId -> 400 | PASS | (400, {'code': 'INVALID_REQUEST', 'message': 'items[0].productId must be a lowercase UUID.', 'requestId': 'GcysnjkhoAMESSA='}) |
+| S7 | 5 concurrent identical submissions -> one 201, four 200, one orderId | PASS | ([200, 200, 200, 200, 201], 1) |
+| S6 | Bob uses Alice's client key -> his own new order (201), never Alice's | PASS | 201 |
+| G3 | Bob GET his order -> 200 | PASS | 200 |
+| G4 | Bob GET Alice's order -> 404, no order data | PASS | (404, {'code': 'ORDER_NOT_FOUND', 'message': 'This order does not exist.', 'requestId': 'Gcyssh6XIAMEawQ='}) |
+| G4 | Bob cancels Alice's order -> 404 | PASS | (404, {'code': 'ORDER_NOT_FOUND', 'message': 'This order does not exist.', 'requestId': 'Gcystj56IAMEa9g='}) |
+| G4 | Alice's order unchanged after Bob's attempt | PASS | (200, {'orderId': 'CC-S6CE-103M', 'status': 'CREATED', 'items': [{'productId': '6ea4a739-ffff-4dff-b418-d24ae1b4506c', 'name': 'Almojábana', 'quantity': 2, 'uni |
+| G4 | Alice GET Bob's order -> 404 | PASS | 404 |
+| S2 | foreign and missing orders get the same 404 body | PASS | ({'code': 'ORDER_NOT_FOUND', 'message': 'This order does not exist.', 'requestId': 'GcysuivqoAMESQA='}, {'code': 'ORDER_NOT_FOUND', 'message': 'This order does  |
+| S3 | Alice cancel -> 200 CANCELLED, repeat identical | PASS | (200, 200) |
+| S3 | cancellation persisted | PASS | 200 |
+| S5 | replay still returns the stored creation result | PASS | 200 |
+| S2 | Alice GET missing order -> 404 | PASS |  |
+| S3 | cancel missing order -> 404 and nothing created | PASS |  |
+| G5 | orders:read-only token POST /orders -> 403 | PASS | 403 |
+| G5 | orders:read-only token cancel -> 403 | PASS | 403 |
+| G5 | orders:read-only token GET someone else's order -> 404 (scope is not ownership) | PASS | 404 |
+| G6 | ID token instead of the access token -> rejected (not 2xx) | PASS | 401 |
+| CORS | preflight allows the frontend origin and the Authorization header | PASS | (204, 'http://localhost:8080', 'authorization,content-type,idempotency-key') |
+| CORS | preflight does not allow other origins | PASS | None |

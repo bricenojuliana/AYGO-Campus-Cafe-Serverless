@@ -9,6 +9,13 @@ Actual output of the local checks and of the checks run against the deployed sta
 | [smoke-2026-10-31T0202Z.txt](smoke-2026-10-31T0202Z.txt) | `python3 scripts/smoke_test.py --stack campus-cafe` | 30/30 checks passed |
 | [evidence-2026-10-31T031854Z.md](evidence-2026-10-31T031854Z.md) | `python3 scripts/collect_evidence.py --stack campus-cafe` | 18 PASS, 0 FAIL |
 
+**Security workshop (Auth0 + JWT authorizer, branch `feature/auth0-security`, stack redeployed on 2026-11-07):**
+
+| File | Command | Result |
+|---|---|---|
+| [smoke-2026-11-07T0315Z.txt](smoke-2026-11-07T0315Z.txt) | `python3 scripts/smoke_test.py --stack campus-cafe` with real Auth0 access tokens of Alice, Bob and a read-only user (Carol), plus an ID token | 46 PASS, 0 FAIL, 0 BLOCKED (G1–G6, S1–S8, CORS) |
+| [evidence-2026-11-07T031633Z.md](evidence-2026-11-07T031633Z.md) | `python3 scripts/collect_evidence.py --stack campus-cafe` authenticated as Alice | 19 PASS, 0 FAIL (includes the persisted owner check) |
+
 **Demo video:** [demo-ui.webm](demo-ui.webm) shows the application working: the local browser UI calling the deployed API.
 
 The smoke run is the console output copied from CloudShell. It ran against the first deployment, before AWS client creation moved to the Lambda init phase; that change does not alter request handling, and the later evidence run repeats the concurrency, replay and fault checks on the current code.
