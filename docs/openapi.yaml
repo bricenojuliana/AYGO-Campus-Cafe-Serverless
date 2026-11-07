@@ -10,10 +10,18 @@ info:
       (ISO 4217, 2 minor units), so `priceCents: 200000` is $2.000.
     * Prices and totals are computed by the server from the current catalog. A request that sends
       `priceCents`, `totalCents` or any other unknown field is rejected.
-    * There is no authentication in the workshop baseline. `template.yaml` marks where a JWT
-      authorizer is attached; Orders then scopes orders and idempotency keys to the token's `sub`.
-    * CORS allows only the frontend origin, methods GET/POST/OPTIONS and the headers
-      `Content-Type` and `Idempotency-Key`. No response header is exposed to the browser.
+    * `/products` is public (a deliberately public, synthetic catalog). Every `/orders` operation needs an
+      Auth0 **access token** for this API's audience, sent as `Authorization: Bearer <token>`, with exactly
+      one scope per operation (`orders:create`, `orders:read`, `orders:cancel`). An ID token is not accepted.
+    * The API Gateway JWT authorizer validates the token (RS256 signature, issuer, audience, expiry, scope)
+      before Orders runs: missing or invalid token → 401, missing scope → 403. These two come from the
+      gateway with its own body `{"message": "..."}`.
+    * Orders identifies the caller by the verified `(iss, sub)` pair, stores it as the order's owner and
+      returns the same 404 for a missing order, someone else's order and a legacy order without an owner.
+      Idempotency keys are scoped to that pair.
+    * CORS allows only the frontend origin, methods GET/POST/OPTIONS and the headers `Authorization`,
+      `Content-Type` and `Idempotency-Key`. No response header is exposed to the browser. CORS is not
+      authentication.
 servers:
   - url: https://{apiId}.execute-api.{region}.amazonaws.com
     description: The `ApiUrl` output of the `campus-cafe` stack.
@@ -30,6 +38,7 @@ paths:
     get:
       tags: [Catalog]
       operationId: listProducts
+      security: []  # public: no token needed
       summary: List every product on the menu, available or not.
       responses:
         "200":
@@ -51,6 +60,7 @@ paths:
     get:
       tags: [Catalog]
       operationId: getProduct
+      security: []  # public: no token needed
       summary: Get one product. Orders calls this route through the gateway to price an order.
       parameters:
         - $ref: "#/components/parameters/ProductId"
@@ -77,6 +87,8 @@ paths:
     post:
       tags: [Orders]
       operationId: createOrder
+      security:
+        - auth0: ["orders:create"]
       summary: Create an order, or replay the result of an earlier submission with the same key.
       description: |
         The client generates one `Idempotency-Key` per submission and reuses it on every retry of
@@ -109,6 +121,10 @@ paths:
                 - productId: 382501b6-8968-4ca8-add5-961d414d5bb9
                   quantity: 2
       responses:
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "201":
           description: Order created.
           headers:
@@ -176,10 +192,16 @@ paths:
     get:
       tags: [Orders]
       operationId: getOrder
+      security:
+        - auth0: ["orders:read"]
       summary: Get the current state of an order (strongly consistent read).
       parameters:
         - $ref: "#/components/parameters/OrderId"
       responses:
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "200":
           description: The order as it is now.
           content:
@@ -194,6 +216,8 @@ paths:
     post:
       tags: [Orders]
       operationId: cancelOrder
+      security:
+        - auth0: ["orders:cancel"]
       summary: Move an order from CREATED to CANCELLED.
       description: |
         Idempotent: cancelling an order that is already CANCELLED returns 200 with the same
@@ -201,6 +225,10 @@ paths:
       parameters:
         - $ref: "#/components/parameters/OrderId"
       responses:
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "200":
           description: The cancelled order.
           content:
@@ -212,6 +240,21 @@ paths:
         "503":
           $ref: "#/components/responses/StoreUnavailable"
 components:
+  securitySchemes:
+    auth0:
+      type: oauth2
+      description: |
+        Auth0 Authorization Code Flow with PKCE (public SPA client, no client secret), requesting an access
+        token with `audience` = the Campus Café API identifier (`Auth0Audience` stack parameter). Replace
+        YOUR_TENANT with the Auth0 domain; the issuer is `https://YOUR_TENANT/` (with the trailing slash).
+      flows:
+        authorizationCode:
+          authorizationUrl: https://YOUR_TENANT.us.auth0.com/authorize
+          tokenUrl: https://YOUR_TENANT.us.auth0.com/oauth/token
+          scopes:
+            orders:create: Create orders owned by the caller
+            orders:read: Read the caller's own orders
+            orders:cancel: Cancel the caller's own orders
   parameters:
     ProductId:
       name: productId
@@ -232,8 +275,39 @@ components:
         type: string
       example: CC-7K3Q-9XMD
   responses:
+    Unauthorized:
+      description: >-
+        Missing, malformed, expired or otherwise invalid access token (wrong issuer or audience, ID token).
+        Normally answered by the gateway authorizer; Orders does not run. Orders also answers
+        `UNAUTHENTICATED` itself if the verified context is ever missing (fail closed).
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/GatewayError"
+              - $ref: "#/components/schemas/Error"
+          example:
+            message: Unauthorized
+    Forbidden:
+      description: >-
+        Valid token without this operation's scope. Normally answered by the gateway authorizer; Orders
+        checks the scope again and answers `INSUFFICIENT_SCOPE`.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/GatewayError"
+              - $ref: "#/components/schemas/Error"
+          example:
+            message: Forbidden
     OrderNotFound:
-      description: No such order (`ORDER_NOT_FOUND`).
+      description: >-
+        `ORDER_NOT_FOUND`. Identical for an order that does not exist, an order owned by someone else and a
+        legacy order without an owner, so order codes cannot be probed. No order data or owner is returned.
       content:
         application/json:
           schema:
@@ -249,6 +323,13 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
   schemas:
+    GatewayError:
+      type: object
+      description: Body API Gateway itself returns when the JWT authorizer rejects a request.
+      required: [message]
+      properties:
+        message:
+          type: string
     Money:
       type: integer
       minimum: 0

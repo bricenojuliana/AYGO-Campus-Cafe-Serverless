@@ -2,6 +2,8 @@
 
 Ordering application for a campus café: a locally served web interface, **API Gateway HTTP API (payload 2.0)**, two **Python 3.13** Lambdas (Catalog and Orders), one DynamoDB table per service and logs in CloudWatch. All infrastructure is created with **AWS SAM** (`template.yaml`).
 
+Users sign in with **Auth0** (Authorization Code Flow with PKCE). The menu is public; every order operation needs an Auth0 access token checked by the gateway's **JWT authorizer**, and each user can only see and cancel their own orders. See [Authentication and authorization](#authentication-and-authorization-auth0).
+
 ![Campus Café architecture](docs/architecture.png)
 
 **Demo** — the local browser UI calling the deployed API:
@@ -40,6 +42,32 @@ https://github.com/user-attachments/assets/9d5d8ba3-3dea-425c-a212-0e6836cb9025
   ```
 
 * **To deploy:** access to the AWS console. Deployment runs in **AWS CloudShell**, a terminal inside the console that already includes `aws` and `sam` and uses the session you signed in with. Credentials are **never** written to the repository or the chat.
+
+## Authentication and authorization (Auth0)
+
+| Route | Access | Enforced by |
+|---|---|---|
+| `GET /products`, `GET /products/{productId}` | public (synthetic catalog) | — |
+| `POST /orders` | access token with `orders:create` | gateway JWT authorizer + Orders |
+| `GET /orders/{orderId}` | access token with `orders:read` **and** being the order's owner | gateway (token, scope) + Orders (owner) |
+| `POST /orders/{orderId}/cancel` | access token with `orders:cancel`, owner, order still `CREATED` | gateway + Orders + DynamoDB condition |
+
+The owner is the verified `(iss, sub)` of the token, stored on the order by the server. Someone else's order, a missing order and a legacy order without owner all get the same 404. Idempotency keys are scoped to that owner. Details: [docs/DESIGN.md](docs/DESIGN.md) §8.
+
+### Auth0 setup (once, in the Auth0 dashboard)
+
+1. **API** — *Applications → APIs → Create API*: name `Campus Café API`, **Identifier** e.g. `https://campus-cafe-api` (this is the *audience*), signing algorithm **RS256**. In *Permissions* add `orders:create`, `orders:read`, `orders:cancel`. In *Settings* turn on **Enable RBAC** (the gateway reads the `scope` claim, so "Add Permissions in the Access Token" is not needed).
+2. **SPA** — *Applications → Applications → Create Application* → **Single Page Web Application**. In *Settings → Application URIs* set **Allowed Callback URLs**, **Allowed Logout URLs** and **Allowed Web Origins** to `http://localhost:8080`. Do not use a client secret anywhere.
+3. **Roles and test users** — *User Management → Roles*: a role `Customer` with the three permissions, assigned to the synthetic users **Alice** and **Bob** (e.g. `alice@example.com`, `bob@example.com`). Optional for check G5: a user **Carol** with a role that has only `orders:read`.
+
+Values you will need (all public, never secrets):
+
+| Value | Where | Used by |
+|---|---|---|
+| Domain, e.g. `your-tenant.us.auth0.com` | SPA → Settings | frontend `auth0Domain` |
+| Issuer `https://<domain>/` (with the trailing slash) | derived from the domain | `Auth0Issuer` stack parameter |
+| API Identifier, e.g. `https://campus-cafe-api` | API → Settings | `Auth0Audience` parameter and frontend `auth0Audience` |
+| Client ID | SPA → Settings | frontend `auth0ClientId` |
 
 ## 1. Local automated tests (no AWS)
 
@@ -109,6 +137,8 @@ aws iam get-role --role-name LabRole --query Role.Arn --output text
 
 Paste it when `sam deploy --guided` asks for `Parameter ExecutionRoleArn`. In an account that does allow creating roles, leave that parameter empty.
 
+`sam deploy --guided` also asks for `Parameter Auth0Issuer` (e.g. `https://your-tenant.us.auth0.com/`, **with** the trailing slash) and `Parameter Auth0Audience` (the API Identifier). Run the guided mode again whenever a new parameter appears: it keeps your previous answers, including `ExecutionRoleArn`. Do **not** pass only the Auth0 values with `--parameter-overrides`: that replaces the whole saved list, drops `ExecutionRoleArn` and the deployment fails again on `iam:CreateRole`.
+
 ```bash
 sam validate --lint
 ```
@@ -170,24 +200,34 @@ It reads `CatalogTableName` and `Currency` from the stack outputs and validates 
 
 ## 4. Verify the deployed API
 
-In CloudShell:
+The smoke test needs real **access tokens** of the test users. Tokens are credentials: never paste them into chats, files, commits, screenshots or third-party decoder websites.
+
+**Getting a token.** Sign in to the local UI (section 5) as Alice in her own browser profile, open DevTools → *Network*, click any `/orders` request and copy the value of its `Authorization` request header **after** `Bearer `. In CloudShell, read it without echoing it or saving it in the shell history:
+
+```bash
+read -rs CAFE_TOKEN_ALICE && export CAFE_TOKEN_ALICE
+```
+
+Repeat for Bob (`CAFE_TOKEN_BOB`) in a second browser profile, and optionally for a user with only `orders:read` (`CAFE_TOKEN_READER`, check G5) and an ID token (`CAFE_ID_TOKEN`, check G6). Then:
 
 ```bash
 python3 scripts/smoke_test.py --stack campus-cafe
 ```
 
-To keep the output as evidence, run it as `python3 scripts/smoke_test.py --stack campus-cafe | tee docs/evidence/smoke-$(date -u +%Y-%m-%dT%H%MZ).txt` and download the file.
+To keep the output as evidence, run it as `python3 scripts/smoke_test.py --stack campus-cafe | tee docs/evidence/smoke-$(date -u +%Y-%m-%dT%H%MZ).txt` and download the file. Token values are masked in everything the script prints.
 
-It sends real requests to the deployed API:
+Each check is labeled with its workshop ID and reported as PASS, FAIL or BLOCKED (a token it needs was not provided); it ends with a Markdown table:
 
-* product list and detail;
-* 5 concurrent identical creations, which must leave a single order;
-* attempts to set the price or total from the client, and other invalid input (400);
-* creation (201 + `Location`), replay (200, same body) and key conflict (409);
-* unknown product (400) and unavailable product (409);
-* lookup, repeated cancellation, 404s and CORS preflight.
+* **G1** public product list and detail without a token;
+* **G2** every Orders route without a token, and with a tampered token (broken signature) → 401;
+* **G3** Alice and Bob each create and read their own order;
+* **G4** Bob reads and cancels Alice's order (and Alice Bob's) → 404, Alice's order unchanged;
+* **G5** a valid token without the route's scope → 403;
+* **G6** an ID token instead of the access token → rejected;
+* **S1–S8** over HTTP: forged owner/price/total fields and other invalid input (400), unknown/unavailable product, same-key replay (200) and conflict (409), Bob's independent order with Alice's key, 5 concurrent identical creations → one order, repeated cancellation, uniform 404s;
+* CORS preflight with the `Authorization` header, and rejection of other origins.
 
-It creates and cancels real orders.
+It creates and cancels real (synthetic) orders.
 
 ### Quality attribute evidence
 
@@ -197,14 +237,14 @@ In CloudShell:
 python3 scripts/collect_evidence.py --stack campus-cafe
 ```
 
-The script writes `docs/evidence/evidence-<timestamp>.md`. Download it with **Actions → Download file** (path `campus-cafe/docs/evidence/...`). The report covers:
+It needs `CAFE_TOKEN_ALICE` exported as above. The script writes `docs/evidence/evidence-<timestamp>.md`. Download it with **Actions → Download file** (path `campus-cafe/docs/evidence/...`). The report covers:
 
-* **Reliability:** 5 concurrent identical creations that must produce a single stored order. After updating the Lambda configuration, it checks that the replay returns the same result.
+* **Reliability:** 5 concurrent identical creations that must produce a single stored order, whose persisted owner is the token's issuer and subject (subject shortened in the report). After updating the Lambda configuration, it checks that the replay returns the same result.
 * **Persistence:** the same order is read after the update.
 * **Performance:** 3 warm-up reads and 20 sequential ones. It reports individual timings and p95, and cold starts separately, taken from the `REPORT ... Init Duration` lines.
 * **Observability:** follows the creation's `apigw-requestid` from the gateway access log to the Orders logs (with `orderId`) and the Catalog logs (`correlationId`).
 * **Fault isolation:** temporarily points Orders' `CATALOG_BASE_URL` to an unreachable URL: first a DNS failure, then a timeout. It checks for the 503 response and that neither the order nor the idempotency record is stored.
-* **Security:** inspects `config.js` and the actual policies of each role.
+* **Security:** inspects `config.js` (only the API URL and public Auth0 values, no secrets) and the actual policies of each role.
 
 The script **temporarily** changes the Orders function environment, outside CloudFormation, and always restores it when it finishes. A later `sam deploy` also resets it. Your user needs `lambda:UpdateFunctionConfiguration`, `logs:FilterLogEvents`, IAM read access and `dynamodb:Scan`/`GetItem` on the orders table.
 
@@ -216,15 +256,15 @@ In CloudShell, copy the API URL:
 aws cloudformation describe-stacks --stack-name campus-cafe --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text
 ```
 
-On your machine, copy `frontend/config.example.js` to `frontend/config.js` and paste the URL into `apiBaseUrl` (it is not a secret). `config.js` belongs to one deployment, so it is in `.gitignore`. Then start the interface:
+On your machine, copy `frontend/config.example.js` to `frontend/config.js` and fill in `apiBaseUrl` (that URL), `auth0Domain`, `auth0ClientId` and `auth0Audience` (see [Auth0 setup](#auth0-setup-once-in-the-auth0-dashboard)). All four are public values. `config.js` belongs to one deployment, so it is in `.gitignore`. Then start the interface:
 
 ```bash
 scripts/serve_frontend.sh
 ```
 
-Open http://localhost:8080. Each order gets a short code such as `CC-7K3Q-9XMD`, which can be searched in lowercase or without dashes. That origin must match `FrontendOrigin`. If you use another port, redeploy with `--parameter-overrides FrontendOrigin=http://localhost:PORT`.
+Open http://localhost:8080 (exactly this origin: it must match the Auth0 URLs and `FrontendOrigin`). The menu and the cart work without login; **Log in** opens Auth0, and the header then shows who is signed in, with the permissions granted to the token. Use a separate browser profile per test user so their sessions do not mix. Each order gets a short code such as `CC-7K3Q-9XMD`, which can be searched in lowercase or without dashes. That origin must match `FrontendOrigin`. If you use another port, redeploy with `--parameter-overrides FrontendOrigin=http://localhost:PORT`.
 
-If you have a local AWS profile, `scripts/configure_frontend.sh campus-cafe` writes `config.js` automatically.
+If you have a local AWS profile, `AUTH0_CLIENT_ID=<SPA client ID> scripts/configure_frontend.sh campus-cafe` writes `config.js` from the stack outputs (`ApiUrl`, `Auth0Issuer`, `Auth0Audience`).
 
 ## 6. Logs and metrics
 
@@ -264,7 +304,9 @@ aws dynamodb delete-table --table-name "$ORDERS_TABLE"
 
 ## Local test harness
 
-`tests/e2e/local_gateway.py` runs the real handlers behind a minimal HTTP API 2.0 emulator, with moto DynamoDB, to try the interface without credentials. It is **for testing only**: it is not deployed and does not replace API Gateway, Lambda or DynamoDB.
+`tests/e2e/local_gateway.py` runs the real handlers behind a minimal HTTP API 2.0 emulator, with moto DynamoDB, to try the interface without AWS (login still goes to your real Auth0 tenant, configured in `frontend/config.js`). It is **for testing only**: it is not deployed and does not replace API Gateway, Lambda or DynamoDB.
+
+Its JWT authorizer is **emulated**: it reads the token's claims and applies the gateway's issuer, audience, expiry and scope checks, but it does **not** verify the signature. Results obtained through it show Orders' behavior, never that the deployed authorizer works; a tampered-token check (G2) fails there by design. moto also does not isolate concurrent transactions, so the concurrency check (S7) is only meaningful against AWS.
 
 ```bash
 .venv/bin/python tests/e2e/local_gateway.py

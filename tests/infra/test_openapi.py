@@ -83,3 +83,22 @@ def test_request_schema_matches_the_domain_validation(spec):
 def test_every_orders_error_code_is_documented(spec):
     documented = set(spec["components"]["schemas"]["Error"]["properties"]["code"]["enum"])
     assert {error.code for error in ERROR_STATUS} <= documented
+
+
+def test_security_in_the_contract_matches_the_gateway_and_the_handler(spec):
+    """Products are public; each Orders operation requires exactly the scope ROUTE_SCOPES enforces."""
+    from orders_service.api.auth import ROUTE_SCOPES
+
+    declared = {}
+    for path, item in spec["paths"].items():
+        for method, operation in item.items():
+            if method in METHODS:
+                declared[f"{method.upper()} {path}"] = operation.get("security")
+    assert declared["GET /products"] == [] and declared["GET /products/{productId}"] == []
+    for route, scope in ROUTE_SCOPES.items():
+        assert declared[route] == [{"auth0": [scope]}], route
+        method, path = route.split(" ", 1)
+        expected = {"401", "403"} | ({"404"} if "{orderId}" in path else set())  # uniform 404 on order lookups
+        assert expected <= set(spec["paths"][path][method.lower()]["responses"])
+    flow = spec["components"]["securitySchemes"]["auth0"]["flows"]["authorizationCode"]
+    assert set(flow["scopes"]) == set(ROUTE_SCOPES.values())

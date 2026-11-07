@@ -2,7 +2,8 @@
 
 Usage: python scripts/collect_evidence.py [--stack campus-cafe] [--region us-east-1]
 
-Uses your local AWS profile. It creates synthetic orders and TEMPORARILY changes the Orders function's
+Uses your local AWS profile, and Alice's API access token from CAFE_TOKEN_ALICE (see scripts/smoke_test.py;
+never printed). It creates synthetic orders and TEMPORARILY changes the Orders function's
 environment (a revision marker, then an unreachable Catalog URL); the original environment is always
 restored at the end. Those changes are outside CloudFormation; the next `sam deploy` also resets them.
 """
@@ -22,7 +23,7 @@ from pathlib import Path
 import boto3
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from smoke_test import request  # noqa: E402
+from smoke_test import TOKENS, redact, request  # noqa: E402
 from stack_outputs import DEFAULT_STACK, stack_outputs  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +40,7 @@ class Report:
         print(f"\n== {title}")
 
     def line(self, text=""):
+        text = redact(text)  # defense in depth: no bearer token can reach the report or the console
         self.lines.append(text)
         print(text)
 
@@ -47,9 +49,9 @@ class Report:
         self.line(f"- {'PASS' if ok else 'FAIL'} — {name}" + (f" — `{detail}`" if detail else ""))
 
 
-def timed(method, url, body=None, headers=None):
+def timed(method, url, body=None, headers=None, token=None):
     started = time.perf_counter()
-    status, response_headers, payload = request(method, url, body, headers)
+    status, response_headers, payload = request(method, url, body, headers, token=token)
     return status, response_headers, payload, (time.perf_counter() - started) * 1000
 
 
@@ -104,6 +106,9 @@ def main():
     parser.add_argument("--stack", default=DEFAULT_STACK)
     parser.add_argument("--region")
     args = parser.parse_args()
+    alice = TOKENS["TOKEN_ALICE"]
+    if not alice:
+        sys.exit("CAFE_TOKEN_ALICE is required (an API access token of Alice); see scripts/smoke_test.py.")
 
     session = boto3.session.Session(region_name=args.region)
     region = session.region_name
@@ -136,7 +141,7 @@ def main():
 
         def submit(_):
             barrier.wait()
-            return request("POST", f"{api}/orders", body, {"Idempotency-Key": key})
+            return request("POST", f"{api}/orders", body, {"Idempotency-Key": key}, token=alice)
 
         with ThreadPoolExecutor(max_workers=5) as pool:
             outcomes = list(pool.map(submit, range(5)))
@@ -149,6 +154,12 @@ def main():
         r.check("statuses are one 201 and four 200", statuses == [200, 200, 200, 200, 201], statuses)
         r.check("one order ID returned to all five", len(ids) == 1, ids)
         r.check("one stored order created by this run", stored == 1, f"orders stored: {stored}")
+        item = ddb.get_item(TableName=orders_table, Key={"pk": {"S": f"ORDER#{order.get('orderId')}"}},
+                            ConsistentRead=True).get("Item", {})
+        owner_iss, owner_sub = item.get("ownerIss", {}).get("S"), item.get("ownerSub", {}).get("S", "")
+        r.check("persisted owner is the token's issuer + subject (G3)",
+                owner_iss == out.get("Auth0Issuer") and bool(owner_sub),
+                f"ownerIss={owner_iss} ownerSub={owner_sub[:10]}…")  # subject shortened in shared evidence
         r.check("server-calculated total", order.get("totalCents") == product["priceCents"] * 2,
                 f"{order.get('totalCents')} = 2 x {product['priceCents']} {order.get('currency')}")
 
@@ -156,17 +167,17 @@ def main():
         r.h("Reliability & persistence — after a Lambda configuration update")
         update_env(lam, orders_fn, {**original_env, "EVIDENCE_REVISION": run_started})
         r.line(f"Updated `{orders_fn}` environment (EVIDENCE_REVISION={run_started}); new execution environments start.")
-        status, _, replay, cold_ms = timed("POST", f"{api}/orders", body, {"Idempotency-Key": key})
+        status, _, replay, cold_ms = timed("POST", f"{api}/orders", body, {"Idempotency-Key": key}, token=alice)
         r.check("replay after update returns the original creation result", status == 200 and replay == order, status)
         r.line(f"- First request after the update (includes cold start): {cold_ms:.0f} ms")
-        status, _, fetched, _ = timed("GET", f"{api}/orders/{order['orderId']}")
+        status, _, fetched, _ = timed("GET", f"{api}/orders/{order['orderId']}", token=alice)
         r.check("same order retrievable after update (consistent read)", status == 200 and fetched["orderId"] == order["orderId"], status)
 
         # ---------------- Performance ----------------
         r.h("Performance — GET /orders/{orderId}, 3 warm-up + 20 sequential")
         for _ in range(3):
-            timed("GET", f"{api}/orders/{order['orderId']}")
-        samples = [timed("GET", f"{api}/orders/{order['orderId']}")[3] for _ in range(20)]
+            timed("GET", f"{api}/orders/{order['orderId']}", token=alice)
+        samples = [timed("GET", f"{api}/orders/{order['orderId']}", token=alice)[3] for _ in range(20)]
         r.line("Timings (ms): " + ", ".join(f"{s:.0f}" for s in samples))
         r.line(f"- min {min(samples):.0f} · median {statistics.median(samples):.0f} · p95 {p95(samples):.0f} · max {max(samples):.0f} ms "
                f"(client-side, from this machine to `{region}`)")
@@ -198,7 +209,7 @@ def main():
             update_env(lam, orders_fn, {**original_env, "CATALOG_BASE_URL": url})
             fault_key = f"evidence-fault-{uuid.uuid4()}"
             count_before = count_orders_since(ddb, orders_table, run_started)
-            status, _, payload, elapsed = timed("POST", f"{api}/orders", body, {"Idempotency-Key": fault_key})
+            status, _, payload, elapsed = timed("POST", f"{api}/orders", body, {"Idempotency-Key": fault_key}, token=alice)
             record = ddb.get_item(TableName=orders_table, Key={"pk": {"S": f"IDEMPOTENCY#{fault_key}"}}, ConsistentRead=True)
             count_after = count_orders_since(ddb, orders_table, run_started)
             r.check(f"{label}: 503 CATALOG_UNAVAILABLE", status == 503 and payload.get("code") == "CATALOG_UNAVAILABLE",
@@ -210,7 +221,8 @@ def main():
         update_env(lam, orders_fn, original_env)
         r.line(f"\nRestored the original environment of `{orders_fn}`.")
 
-    status, _, after_restore, _ = timed("POST", f"{api}/orders", body, {"Idempotency-Key": f"evidence-{uuid.uuid4()}"})
+    status, _, after_restore, _ = timed("POST", f"{api}/orders", body, {"Idempotency-Key": f"evidence-{uuid.uuid4()}"},
+                                        token=alice)
     r.check("orders work again after restoring configuration", status == 201, status)
 
     # ---------------- Security ----------------

@@ -213,9 +213,11 @@ def test_runtime_declared_and_no_hardcoded_resource_names(template, resources):
 def test_no_credentials_in_repository():
     # Patterns of real secrets, not the words themselves (scripts legitimately mention them).
     suspicious = [re.compile(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b"), re.compile(r"aws_secret_access_key\s*=\s*\S+"),
-                  re.compile(r"BEGIN (RSA |EC )?PRIVATE KEY")]
+                  re.compile(r"BEGIN (RSA |EC )?PRIVATE KEY"),
+                  # a JWT (header.payload.signature, both JSON parts base64url "eyJ..."): bearer tokens must never be committed
+                  re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")]
     for path in ROOT.rglob("*"):
         if path.is_file() and not {".venv", ".aws-sam", ".pytest_cache", "tests"} & set(path.parts) \
-                and path.suffix in {".py", ".yaml", ".toml", ".js", ".html", ".json", ".md", ".sh"}:
+                and path.suffix in {".py", ".yaml", ".toml", ".js", ".html", ".json", ".md", ".sh", ".txt", ".csv"}:
             text = path.read_text(errors="ignore")
             assert not any(pattern.search(text) for pattern in suspicious), path
