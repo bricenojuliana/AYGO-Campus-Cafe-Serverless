@@ -1,0 +1,36 @@
+// Protected order request as implemented. Render: dot -Tsvg authorization-flow.dot -o authorization-flow.svg
+digraph protected_order_request {
+  graph [bgcolor="#f8fafc", fontname="Helvetica", fontsize=20, labelloc=t, pad=0.4, nodesep=0.45, ranksep=0.45,
+         label="CAMPUS CAFÉ | PROTECTED ORDER REQUEST AS IMPLEMENTED\nA valid token is necessary, but never sufficient\n "];
+  node  [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, color="#94a3b8", margin="0.18,0.1"];
+  edge  [fontname="Helvetica", fontsize=9, color="#64748b", arrowsize=0.7];
+
+  req   [fillcolor="#e0f2fe", label="Client sends HTTPS request\nAuthorization: Bearer <API access token>"];
+  jwt   [shape=diamond, fillcolor="#dbeafe", label="Gateway: trusted JWT valid?\nsignature (JWKS) · iss · aud\nexp / nbf"];
+  scope [shape=diamond, fillcolor="#dbeafe", label="Gateway: route scope\npresent? (exactly one per route)"];
+  e401  [fillcolor="#fee2e2", label="401 {\"message\":\"Unauthorized\"}\nfrom the gateway · Orders not invoked\n(G2, G6)"];
+  e403  [fillcolor="#fee2e2", label="403 {\"message\":\"Forbidden\"}\nfrom the gateway (G5)"];
+
+  ctx   [fillcolor="#fef3c7", label="Orders: verified context present?\niss and sub non-empty strings\nelse 401 UNAUTHENTICATED + safe diagnostic log"];
+  rescope [shape=diamond, fillcolor="#fef3c7", label="Orders: scope re-check\n(defense in depth)"];
+  e403b [fillcolor="#fee2e2", label="403 INSUFFICIENT_SCOPE\nno Catalog call, no write"];
+  op    [shape=diamond, fillcolor="#fef3c7", label="Create or\nread / cancel?"];
+
+  create [fillcolor="#dcfce7", label="CREATE\nbody accepts only items (owner/price fields → 400)\nlookup IDEMPOTENCY#SHA-256(JSON[iss, sub, key]) first\nsame owner + fingerprint → replay · else 409\nprices from Catalog · one conditional transaction:\norder (ownerIss, ownerSub) + scoped record"];
+  owner  [shape=diamond, fillcolor="#fef3c7", label="Stored order exists\nand ownerIss/ownerSub\nmatch (iss, sub)?"];
+  ok     [fillcolor="#dcfce7", label="READ: return the order (owner never in the body)\nCANCEL: PutItem IF attribute_exists(pk)\nAND version AND ownerIss AND ownerSub\nAND #status = CREATED\nrepeat cancel → same CANCELLED order"];
+  e404   [fillcolor="#fee2e2", label="404 ORDER_NOT_FOUND\nidentical for missing, another user's\nand legacy ownerless orders\nno order payload, no owner"];
+
+  req -> jwt;
+  jwt -> scope [label="yes"];
+  jwt -> e401 [label="no"];
+  scope -> ctx [label="yes"];
+  scope -> e403 [label="no"];
+  ctx -> rescope;
+  rescope -> op [label="ok"];
+  rescope -> e403b [label="missing"];
+  op -> create [label="create"];
+  op -> owner [label="read / cancel"];
+  owner -> ok [label="yes"];
+  owner -> e404 [label="no / ownerless"];
+}

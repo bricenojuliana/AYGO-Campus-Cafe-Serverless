@@ -71,7 +71,7 @@ def test_committed_example_config_has_only_public_keys_and_real_config_is_not_co
     ('window.C = {apiBaseUrl: "https://x", clientSecret: "abc"};', False),
     ('window.C = {apiBaseUrl: "AKIAABCDEFGHIJKLMNOP"};', False),
     ('window.C = {apiBaseUrl: "https://x", extra: "1"};', False),
-])
+], ids=["public-values", "client-secret", "aws-key-shape", "unknown-key"])  # ids keep fixture values out of logs
 def test_evidence_check_accepts_public_values_and_rejects_secrets(config_js, ok):
     assert inspect_frontend_config(config_js)[0] is ok
 

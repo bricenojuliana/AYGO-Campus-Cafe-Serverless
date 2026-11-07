@@ -1,0 +1,40 @@
+// Campus Café security architecture as implemented (branch feature/auth0-security).
+// Render: dot -Tsvg architecture.dot -o architecture.svg && dot -Tpng -Gdpi=150 architecture.dot -o architecture.png
+digraph campus_cafe_security {
+  graph [rankdir=LR, bgcolor="#f8fafc", fontname="Helvetica", fontsize=20, labelloc=t, pad=0.4, nodesep=0.5, ranksep=0.9,
+         label="CAMPUS CAFÉ | SECURITY ARCHITECTURE AS IMPLEMENTED\nAuth0 access token at the edge · ownership and conditional writes in Orders\n "];
+  node  [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, color="#94a3b8", penwidth=1.2, margin="0.18,0.1"];
+  edge  [fontname="Helvetica", fontsize=9, color="#64748b", arrowsize=0.7];
+
+  spa [fillcolor="#e0f2fe", label="Browser SPA  (http://localhost:8080)\n@auth0/auth0-spa-js 2.28.4 (pinned + SRI)\nAuthorization Code + PKCE · no client secret\ntokens in SDK memory · ID token only for display"];
+  idp [fillcolor="#ede9fe", label="Auth0 tenant  dev-…us.auth0.com\nAPI 'Campus Café API'  aud https://campus-cafe-api · RS256\nRBAC on · role Customer = orders:create/read/cancel\nusers Alice, Bob (Customer) · Carol (orders:read only)"];
+
+  subgraph cluster_aws {
+    label="AWS ACADEMY LEARNER LAB · us-east-1 · stack campus-cafe · existing LabRole (ExecutionRoleArn) · no IAM resources added";
+    fontsize=11; style="rounded"; color="#cbd5e1"; fontcolor="#334155";
+
+    gw   [fillcolor="#dbeafe", label="API Gateway HTTP API  ($default stage)\npayload format 2.0 · CORS: localhost:8080,\nAuthorization / Content-Type / Idempotency-Key\naccess log: requestId, routeKey, status, authorizerError (never the token)"];
+    jwt  [fillcolor="#dbeafe", label="OrdersJwtAuthorizer  (native JWT)\nidentity source $request.header.Authorization\nissuer = Auth0Issuer (exact, trailing /) · audience = Auth0Audience\nsignature via JWKS · exp/nbf · one scope per route\nmissing/invalid → 401 · missing scope → 403"];
+
+    orders [fillcolor="#fef3c7", label="Orders Lambda (python3.13)\nprincipal = (iss, sub) from verified claims · fail closed 401\nscope re-checked (403) — differs from handout: defense in depth\nowner check on read/cancel · uniform 404\nidempotency key = SHA-256(JSON[iss, sub, key])"];
+    otable [shape=cylinder, fillcolor="#fef3c7", label="OrdersTable (DynamoDB, retained)\nORDER#id: ownerIss, ownerSub, status, version, items snapshot\nIDEMPOTENCY#sha256: fingerprint, response, owner, TTL\ncreate = TransactWriteItems (conditional)\ncancel = PutItem IF owner AND #status AND version"];
+
+    catalog [fillcolor="#dcfce7", label="Catalog Lambda (python3.13)\npublic synthetic products\nbounded lookup used by Orders"];
+    ctable  [shape=cylinder, fillcolor="#dcfce7", label="CatalogTable (DynamoDB)\nproducts in COP minor units"];
+
+    cw [fillcolor="#f1f5f9", label="CloudWatch Logs\none requestId: access log → Orders → Catalog\nno tokens, no claims, no order payloads in diagnostics"];
+  }
+
+  spa -> idp [dir=both, label="1. login (redirect) + PKCE\nscope: openid profile email orders:*"];
+  spa -> gw  [label="2. HTTPS\nGET /products: no token\n/orders*: Bearer <API access token>"];
+  idp -> jwt [style=dashed, label="issuer JWKS\n(public signing keys)"];
+  gw  -> jwt [dir=both, label="POST /orders [orders:create]\nGET /orders/{orderId} [orders:read]\nPOST /orders/{orderId}/cancel [orders:cancel]"];
+  jwt -> orders [label="authorized only:\nrequestContext.authorizer.jwt.claims"];
+  gw  -> catalog [label="GET /products\nGET /products/{productId}\n(AuthorizationType NONE)"];
+  orders -> otable;
+  catalog -> ctable;
+  orders -> gw [style=dashed, constraint=false, label="price lookup GET /products/{productId}\nthrough the gateway, no user token forwarded\n(differs from handout: not a direct Lambda call)"];
+  orders -> cw [style=dotted];
+  catalog -> cw [style=dotted];
+  gw -> cw [style=dotted];
+}

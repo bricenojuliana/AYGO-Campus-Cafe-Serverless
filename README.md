@@ -13,6 +13,7 @@ https://github.com/user-attachments/assets/9d5d8ba3-3dea-425c-a212-0e6836cb9025
 * API contract: [docs/openapi.yaml](docs/openapi.yaml) (OpenAPI 3.0).
 * Design decisions (service and data boundaries, atomic idempotency, durable state, bounded Catalog call): [docs/DESIGN.md](docs/DESIGN.md).
 * Actual check output and measurements against AWS: [docs/evidence/](docs/evidence/README.md).
+* Security workshop submission (verification table, decision record, diagrams, staff/tenant design, AI-use note, limitations): [docs/security/](docs/security/README.md).
 * Demo video of the application working: [docs/evidence/demo-ui.webm](docs/evidence/demo-ui.webm).
 
 ## Structure
